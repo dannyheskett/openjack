@@ -3,7 +3,5 @@ on:
   pull_request:
     branches: [main]
 jobs:
-  probe:
-    uses: dannyheskett/.github/.github/workflows/attribution-guard.yml@v1
-    permissions:
-      contents: write
+  ping:
+    uses: dannyheskett/.github/.github/workflows/ping.yml@main
