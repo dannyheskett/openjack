@@ -12,6 +12,6 @@ concurrency:
 
 jobs:
   ci:
-    uses: dannyheskett/.github/.github/workflows/game-ci.yml@v2
+    uses: dannyheskett/.github/.github/workflows/game-ci.yml@v1
     with:
       platforms: '["linux","windows","mac"]'
