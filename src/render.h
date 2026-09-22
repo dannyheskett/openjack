@@ -29,6 +29,12 @@ Button render_button_at(const Game* g, int x, int y);
 // -- the wordmark bar and the status line -- opens the menu.
 int render_chrome_bottom(void);
 
+// Show the "where the menu is" hint on the bet screen. The web build compiles
+// the touch UI but also runs in a desktop browser with a mouse, where the hint
+// would be telling the player to do something they cannot; main.c turns it off
+// as soon as it sees a mouse.
+void render_set_menu_hint(bool show);
+
 // Queries ------------------------------------------------------------------
 // Card width in pixels for the current window. The touch layer scales its
 // tap-movement tolerance from it.
