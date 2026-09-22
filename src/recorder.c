@@ -4,20 +4,35 @@
 #define _FILE_OFFSET_BITS 64
 
 #include "recorder.h"
+#include "platform.h"
 
-#include "minih264e.h"  // declarations only (implementation is in encode_h264.c)
-#include "minimp4.h"    // declarations only (implementation is in encode_mux.c)
+// The frame-fidelity mp4 recorder depends on the vendored minih264/minimp4
+// single-header libraries and writes its output to the working directory.
+// Neither is available on the mobile/web builds, so the entire implementation is
+// compiled out there and replaced with no-op stubs at the bottom of the file.
+#if !defined(PLATFORM_ANDROID) && !defined(PLATFORM_WEB) && !defined(PLATFORM_IOS)
+
+// Declarations only (implementations live in encode_h264.c / encode_mux.c). The
+// vendored headers trip a clang-only typedef-redefinition warning under -std=c99;
+// suppress it so the project's own code stays warning-clean.
+#pragma GCC diagnostic push
+#if defined(__clang__)
+#pragma clang diagnostic ignored "-Wtypedef-redefinition"
+#endif
+#include "minih264e.h"
+#include "minimp4.h"
+#pragma GCC diagnostic pop
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-// Canvas dimensions (must be multiples of 16 for the H.264 encoder).
-// These match render.h MIN_W/MIN_H (624=39*16, 528=33*16): regardless of the live
-// window size, the game is re-rendered at this fixed size for capture.
-#define VID_W      624
-#define VID_H      528
+// The capture size, set per game in platform.h (REC_W x REC_H, both multiples of
+// 16 for the H.264 encoder). Regardless of the live window size the game is
+// re-rendered at this fixed size for capture.
+#define VID_W      REC_W
+#define VID_H      REC_H
 #define FPS        60
 #define TIMESCALE  90000
 #define FRAME_DUR  (TIMESCALE / FPS)   // 1500 ticks per frame
@@ -98,7 +113,7 @@ static void auto_name(char* out, size_t cap) {
     localtime_r(&t, &tmv);
 #endif
     char base[256];
-    strftime(base, sizeof base, "openjack-%Y%m%d-%H%M%S", &tmv);
+    strftime(base, sizeof base, GAME_NAME "-%Y%m%d-%H%M%S", &tmv);
     // Timestamps are second-resolution, so disambiguate restarts within the
     // same second (and any pre-existing file) with a -N suffix.
     snprintf(out, cap, "%s.mp4", base);
@@ -207,3 +222,15 @@ void recorder_capture(const RenderTexture2D* canvas) {
     }
     s_frame++;
 }
+
+#else // mobile / web -- no recorder.
+
+bool recorder_start(const char* path) { (void)path; return false; }
+void recorder_stop(void)   { }
+bool recorder_toggle(void) { return false; }
+bool recorder_active(void) { return false; }
+#if !defined(PLATFORM_IOS)
+void recorder_capture(const RenderTexture2D* canvas) { (void)canvas; }
+#endif
+
+#endif // desktop only

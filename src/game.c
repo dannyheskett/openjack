@@ -2,206 +2,548 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define RESHUFFLE_AT 40   // reshuffle once fewer than (52-40) cards remain
+Rules rules_default(void) {
+    Rules r = { .decks = 6, .h17 = false, .surrender = false };
+    return r;
+}
 
 // --------------------------------------------------------------------------
-// Cards / hand value
+// Random numbers: xorshift64*, seeded by the caller, so a seed always deals the
+// same shoe. rng_below() rejects the top sliver of the range instead of taking
+// a plain modulo, which would favour the low cards.
+// --------------------------------------------------------------------------
+static uint64_t rng_next(Game* g) {
+    uint64_t x = g->rng;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    g->rng = x;
+    return x * 0x2545F4914F6CDD1DULL;
+}
+
+static int rng_below(Game* g, int n) {
+    uint64_t lim = UINT64_MAX - (UINT64_MAX % (uint64_t)n);  // a multiple of n
+    uint64_t r;
+    do r = rng_next(g); while (r >= lim);
+    return (int)(r % (uint64_t)n);
+}
+
+// --------------------------------------------------------------------------
+// Totals
 // --------------------------------------------------------------------------
 static int card_points(Card c) {
     if (c.rank >= 10) return 10;   // 10, J, Q, K
-    if (c.rank == 1)  return 11;   // ace (high; demoted below if needed)
+    if (c.rank == 1)  return 11;   // ace, demoted to 1 below when it must be
     return c.rank;
 }
 
-// Best total <= 21 if possible; *soft set when an ace still counts as 11.
-static int hand_value(const Card* h, int n, bool* soft) {
+int hand_total(const Card* cards, int n, bool* soft) {
     int sum = 0, aces = 0;
     for (int i = 0; i < n; i++) {
-        sum += card_points(h[i]);
-        if (h[i].rank == 1) aces++;
+        sum += card_points(cards[i]);
+        if (cards[i].rank == 1) aces++;
     }
     while (sum > 21 && aces > 0) { sum -= 10; aces--; }
     if (soft) *soft = (aces > 0);
     return sum;
 }
 
-static bool is_blackjack(const Card* h, int n) {
-    return n == 2 && hand_value(h, n, NULL) == 21;
+static int total_of(const Hand* h) { return hand_total(h->cards, h->n, NULL); }
+
+bool game_hand_is_blackjack(const Hand* h) {
+    return h->n == 2 && !h->from_split && total_of(h) == 21;
+}
+
+int game_visible_total(const Game* g, const Hand* h, bool* soft) {
+    if (h != &g->dealer || g->hole_shown)
+        return hand_total(h->cards, h->vis, soft);
+    // The dealer's hole card (index 1) stays out of the total until it turns.
+    // Nothing else is dealt to the dealer before then, so that leaves the up
+    // card alone.
+    return hand_total(h->cards, h->vis < 1 ? h->vis : 1, soft);
 }
 
 // --------------------------------------------------------------------------
-// Deck
+// The shoe
 // --------------------------------------------------------------------------
-static void shuffle(Game* g) {
+static void build_shoe(Game* g, int decks) {
     int k = 0;
-    for (int s = 0; s < 4; s++)
-        for (int r = 1; r <= 13; r++)
-            g->deck[k++] = (Card){ (uint8_t)r, (uint8_t)s };
-    for (int i = 51; i > 0; i--) {
-        int j = rand() % (i + 1);
-        Card t = g->deck[i]; g->deck[i] = g->deck[j]; g->deck[j] = t;
+    for (int d = 0; d < decks; d++)
+        for (int s = 0; s < 4; s++)
+            for (int r = 1; r <= 13; r++)
+                g->shoe[k++] = (Card){ (uint8_t)r, (uint8_t)s };
+    g->shoe_n = k;
+    g->shoe_decks = decks;
+}
+
+static void shuffle_shoe(Game* g) {
+    for (int i = g->shoe_n - 1; i > 0; i--) {
+        int j = rng_below(g, i + 1);
+        Card t = g->shoe[i]; g->shoe[i] = g->shoe[j]; g->shoe[j] = t;
     }
     g->draw = 0;
 }
 
-static Card deal_card(Game* g) {
-    if (g->draw >= 52) shuffle(g);
-    return g->deck[g->draw++];
+static void new_shoe(Game* g) {
+    build_shoe(g, g->rules.decks);
+    shuffle_shoe(g);
+    g->short_shoe = false;
 }
+
+// Reshuffle between rounds once three quarters of the shoe is gone. For one
+// deck that leaves 13 cards, which covers nearly every round; the rare round
+// that needs more gets the backstop below.
+static int cut_point(const Game* g) { return g->shoe_n * 3 / 4; }
+
+static void remove_one(Game* g, Card c) {
+    for (int i = 0; i < g->shoe_n; i++) {
+        if (g->shoe[i].rank == c.rank && g->shoe[i].suit == c.suit) {
+            g->shoe[i] = g->shoe[--g->shoe_n];
+            return;
+        }
+    }
+}
+
+// The shoe ran out mid-round. Rebuild it from the cards that are NOT on the
+// table and shuffle those, so no card can appear twice in one round. The next
+// deal shuffles a full shoe again.
+static void rebuild_without_table(Game* g) {
+    build_shoe(g, g->shoe_decks);
+    for (int h = 0; h < g->nhands; h++)
+        for (int i = 0; i < g->hands[h].n; i++) remove_one(g, g->hands[h].cards[i]);
+    for (int i = 0; i < g->dealer.n; i++) remove_one(g, g->dealer.cards[i]);
+    if (g->shoe_n == 0) build_shoe(g, g->shoe_decks);   // cannot happen; stay safe
+    shuffle_shoe(g);
+    g->short_shoe = true;
+}
+
+static Card draw_card(Game* g) {
+    if (g->draw >= g->shoe_n) rebuild_without_table(g);
+    return g->shoe[g->draw++];
+}
+
+// --------------------------------------------------------------------------
+// Presentation queue
+// --------------------------------------------------------------------------
+static void play_entry(Game* g, int e, bool quiet) {
+    if (e < MAX_HANDS || e == Q_DEALER) {
+        Hand* h = (e == Q_DEALER) ? &g->dealer : &g->hands[e];
+        if (h->vis < h->n) h->at[h->vis++] = g->ticks;
+        if (!quiet) {
+            g->events |= EV_DEAL;
+            if (e != Q_DEALER && hand_total(h->cards, h->vis, NULL) > 21) g->events |= EV_BUST;
+        }
+    } else if (e == Q_FLIP) {
+        g->hole_shown = true;
+        g->hole_at = g->ticks;
+        if (!quiet) g->events |= EV_FLIP;
+    } else if (e == Q_SETTLE) {
+        g->shown_bankroll = g->bankroll;
+        g->settled_shown = true;
+        if (!quiet) g->events |= g->outcome_ev;
+        g->outcome_ev = 0;
+    }
+}
+
+static int q_pop(Game* g) {
+    int e = g->queue[g->q_head];
+    g->q_head = (g->q_head + 1) % QUEUE_MAX;
+    g->q_len--;
+    return e;
+}
+
+// Play everything still queued, instantly and silently. Used before any change
+// that would leave the queue pointing at stale cards; in the real game the
+// queue is already empty by then, because input waits for it.
+static void flush_queue(Game* g) {
+    while (g->q_len > 0) play_entry(g, q_pop(g), true);
+    g->timer = 0;
+}
+
+static void q_push(Game* g, int e) {
+    if (g->q_len >= QUEUE_MAX) flush_queue(g);
+    g->queue[(g->q_head + g->q_len) % QUEUE_MAX] = e;
+    g->q_len++;
+}
+
+void game_update(Game* g) {
+    g->ticks++;
+    if (g->timer > 0) g->timer--;
+    while (g->timer == 0 && g->q_len > 0) {
+        int e = q_pop(g);
+        play_entry(g, e, false);
+        g->timer = (e == Q_FLIP) ? FLIP_STEPS : (e == Q_SETTLE) ? 0 : DEAL_STEPS;
+    }
+}
+
+bool game_busy(const Game* g) { return g->q_len > 0 || g->timer > 0; }
 
 // --------------------------------------------------------------------------
 // Lifecycle
 // --------------------------------------------------------------------------
-Game* game_create(void) {
+Game* game_create(uint64_t seed, Rules rules) {
     Game* g = calloc(1, sizeof(Game));
     if (!g) return NULL;
-    g->rng = (unsigned)rand();
-    shuffle(g);
-    g->bankroll = START_BANKROLL;
-    g->bet = MIN_BET * 2;          // default wager
+    g->rng = seed ? seed : 0x9E3779B97F4A7C15ULL;   // xorshift never leaves 0
+    if (rules.decks != 1) rules.decks = MAX_DECKS;
+    g->rules = g->next_rules = rules;
+    new_shoe(g);
+    g->bankroll = g->shown_bankroll = START_BANKROLL;
+    g->bet = DEFAULT_BET;
     g->phase = PHASE_BET;
-    g->result = RES_NONE;
     return g;
 }
 
 void game_destroy(Game* g) { free(g); }
 
-void game_frame_begin(Game* g) { g->events = 0; g->refilled = false; }
+void game_step_begin(Game* g) { g->events = 0; }
 
-int game_player_value(const Game* g) { return hand_value(g->player, g->pn, NULL); }
-int game_dealer_value(const Game* g) { return hand_value(g->dealer, g->dn, NULL); }
-
-int game_dealer_shown(const Game* g) {
-    if (g->reveal || g->dn == 0) return hand_value(g->dealer, g->dn, NULL);
-    return hand_value(g->dealer, 1, NULL);   // up card only
-}
-
-bool game_can_double(const Game* g) {
-    return g->phase == PHASE_PLAYER && g->pn == 2 && g->bankroll >= g->bet;
+void game_set_rules(Game* g, Rules r) {
+    if (r.decks != 1) r.decks = MAX_DECKS;
+    g->next_rules = r;
 }
 
 // --------------------------------------------------------------------------
-// Betting
+// Chips
 // --------------------------------------------------------------------------
-void game_bet_change(Game* g, int delta) {
-    if (g->phase != PHASE_BET) return;
-    g->bet += delta;
-    if (g->bet < MIN_BET) g->bet = MIN_BET;
-    if (g->bet > g->bankroll) g->bet = g->bankroll;
-    if (g->bet < MIN_BET) g->bet = MIN_BET;   // bankroll below min (guarded by refill)
+static void stake(Game* g, int amount) {
+    g->bankroll -= amount;
+    g->shown_bankroll -= amount;
     g->events |= EV_CHIP;
+}
+
+// The largest bet the bankroll covers, in whole steps.
+static int max_bet(const Game* g) {
+    int m = g->bankroll / BET_STEP * BET_STEP;
+    return (m < MIN_BET) ? MIN_BET : m;
+}
+
+static void clamp_bet(Game* g) {
+    g->bet = g->bet / BET_STEP * BET_STEP;
+    if (g->bet > max_bet(g)) g->bet = max_bet(g);
+    if (g->bet < MIN_BET) g->bet = MIN_BET;
+}
+
+void game_bet_change(Game* g, int steps) {
+    if (g->phase != PHASE_BET) return;
+    int before = g->bet;
+    g->bet += steps * BET_STEP;
+    clamp_bet(g);
+    if (g->bet != before) g->events |= EV_CHIP;
 }
 
 // --------------------------------------------------------------------------
 // Round flow
 // --------------------------------------------------------------------------
-static void settle_naturals(Game* g) {
-    bool pbj = is_blackjack(g->player, g->pn);
-    bool dbj = is_blackjack(g->dealer, g->dn);
-    g->reveal = true;
+static void deal_to(Game* g, Hand* h, int target) {
+    if (h->n >= MAX_HAND_CARDS) return;   // unreachable: see MAX_HAND_CARDS
+    h->cards[h->n++] = draw_card(g);
+    q_push(g, target);
+}
+
+static void reveal_hole(Game* g) {
+    if (g->hole_up) return;
+    g->hole_up = true;
+    q_push(g, Q_FLIP);
+}
+
+static void win(Game* g, Hand* h, Result r) {
+    g->bankroll += h->wager * 2;
+    h->delta = h->wager;
+    h->result = r;
+}
+
+static void push(Game* g, Hand* h) {
+    g->bankroll += h->wager;
+    h->delta = 0;
+    h->result = RES_PUSH;
+}
+
+static void lose(Hand* h, Result r) {
+    h->delta = -h->wager;
+    h->result = r;
+}
+
+// Close the round: record the net and queue the outcome, which the player
+// sees (and hears) once every card before it has landed.
+static void finish_round(Game* g) {
     g->phase = PHASE_RESULT;
-    if (pbj && dbj) {
-        g->bankroll += g->wager; g->last_delta = 0; g->result = RES_PUSH;  g->events |= EV_PUSH;
-    } else if (pbj) {
-        int win = (g->wager * 3) / 2;
-        g->bankroll += g->wager + win; g->last_delta = win;
-        g->result = RES_BLACKJACK; g->events |= EV_BLACKJACK;
-    } else { // dbj
-        g->last_delta = -g->wager; g->result = RES_LOSE; g->events |= EV_LOSE;
+    g->last_delta = g->bankroll - g->round_start;
+
+    bool natural = false, all_bust = true;
+    for (int i = 0; i < g->nhands; i++) {
+        Result r = g->hands[i].result;
+        if (r == RES_BLACKJACK || r == RES_EVEN_MONEY) natural = true;
+        if (r != RES_BUST) all_bust = false;
     }
+    // A hand that busts already made its sound as the card landed.
+    if (natural)                 g->outcome_ev = EV_BLACKJACK;
+    else if (all_bust)           g->outcome_ev = 0;
+    else if (g->last_delta > 0)  g->outcome_ev = EV_WIN;
+    else if (g->last_delta < 0)  g->outcome_ev = EV_LOSE;
+    else                         g->outcome_ev = EV_PUSH;
+    q_push(g, Q_SETTLE);
+}
+
+static bool dealer_should_hit(const Game* g) {
+    bool soft;
+    int t = hand_total(g->dealer.cards, g->dealer.n, &soft);
+    return t < 17 || (t == 17 && soft && g->rules.h17);
+}
+
+// Every hand has finished. The hole card turns; if any hand is still in play
+// the dealer draws, then each live hand is settled against the dealer.
+static void dealer_turn(Game* g) {
+    reveal_hole(g);
+    bool live = false;
+    for (int i = 0; i < g->nhands; i++)
+        if (g->hands[i].result == RES_NONE) live = true;
+    if (live)
+        while (dealer_should_hit(g)) deal_to(g, &g->dealer, Q_DEALER);
+
+    int dv = total_of(&g->dealer);
+    for (int i = 0; i < g->nhands; i++) {
+        Hand* h = &g->hands[i];
+        if (h->result != RES_NONE) continue;
+        int pv = total_of(h);
+        if (dv > 21)       win(g, h, RES_DEALER_BUST);
+        else if (pv > dv)  win(g, h, RES_WIN);
+        else if (pv == dv) push(g, h);
+        else               lose(h, RES_LOSE);
+    }
+    finish_round(g);
+}
+
+// Move to the next hand that still has to act. A split hand holds one card
+// until play reaches it, so it gets its second card here, the order a dealer
+// deals it at the table.
+static void advance(Game* g) {
+    while (g->active < g->nhands && g->hands[g->active].done) {
+        g->active++;
+        if (g->active >= g->nhands) break;
+        Hand* h = &g->hands[g->active];
+        if (h->n == 1) {
+            deal_to(g, h, g->active);
+            if (h->split_aces || total_of(h) == 21) h->done = true;
+        }
+    }
+    if (g->active >= g->nhands) dealer_turn(g);
+}
+
+// After a card lands on the active hand: over 21 busts, 21 stands by itself.
+static void after_card(Game* g) {
+    Hand* h = &g->hands[g->active];
+    int t = total_of(h);
+    if (t > 21) {
+        lose(h, RES_BUST);
+        h->done = true;
+    } else if (t == 21 || h->split_aces || h->doubled) {
+        h->done = true;
+    }
+    if (h->done) advance(g);
+}
+
+// The dealer checks the hole card for blackjack under an ace or a ten, then
+// the naturals are settled. Otherwise play passes to the player.
+static void peek_and_continue(Game* g) {
+    Hand* p = &g->hands[0];
+    bool pbj = game_hand_is_blackjack(p);
+    bool dbj = hand_total(g->dealer.cards, 2, NULL) == 21;
+
+    if (dbj) {
+        reveal_hole(g);
+        if (g->insurance > 0) {
+            g->bankroll += g->insurance * 3;          // 2:1 plus the stake
+            g->insurance_delta = g->insurance * 2;
+        }
+        if (pbj) push(g, p);
+        else     lose(p, RES_LOSE);
+        p->done = true;
+        finish_round(g);
+        return;
+    }
+    if (g->insurance > 0) g->insurance_delta = -g->insurance;
+    if (pbj) {
+        reveal_hole(g);
+        int bonus = p->wager * 3 / 2;                 // whole: bets are even
+        g->bankroll += p->wager + bonus;
+        p->delta = bonus;
+        p->result = RES_BLACKJACK;
+        p->done = true;
+        finish_round(g);
+        return;
+    }
+    g->phase = PHASE_PLAYER;
+    g->active = 0;
 }
 
 bool game_deal(Game* g) {
     if (g->phase != PHASE_BET) return false;
-    if (g->bet < MIN_BET) g->bet = MIN_BET;
-    if (g->bet > g->bankroll) g->bet = g->bankroll;
-    if (g->bankroll < g->bet || g->bet < MIN_BET) return false;
+    flush_queue(g);
+    g->rules = g->next_rules;
+    clamp_bet(g);
+    if (g->bankroll < g->bet) return false;   // unreachable: game_next refills
 
-    if (g->draw > RESHUFFLE_AT) shuffle(g);
+    if (g->short_shoe || g->rules.decks != g->shoe_decks || g->draw >= cut_point(g))
+        new_shoe(g);
 
-    g->bankroll -= g->bet;
-    g->wager = g->bet;
-    g->pn = g->dn = 0;
-    g->reveal = false;
-    g->doubled = false;
-    g->result = RES_NONE;
+    memset(g->hands, 0, sizeof g->hands);
+    memset(&g->dealer, 0, sizeof g->dealer);
+    g->nhands = 1;
+    g->active = 0;
+    g->hole_up = g->hole_shown = false;
+    g->insurance = g->insurance_delta = 0;
+    g->even_money = false;
     g->last_delta = 0;
+    g->settled_shown = false;
+    g->outcome_ev = 0;
+    g->round_start = g->bankroll;
+    g->hands_played++;
 
-    g->player[g->pn++] = deal_card(g);
-    g->dealer[g->dn++] = deal_card(g);   // up card
-    g->player[g->pn++] = deal_card(g);
-    g->dealer[g->dn++] = deal_card(g);   // hole card
-    g->events |= EV_DEAL;
+    stake(g, g->bet);
+    g->hands[0].wager = g->bet;
 
-    if (is_blackjack(g->player, g->pn) || is_blackjack(g->dealer, g->dn))
-        settle_naturals(g);
-    else
-        g->phase = PHASE_PLAYER;
+    // Player, dealer up card, player, dealer hole card.
+    deal_to(g, &g->hands[0], 0);
+    deal_to(g, &g->dealer, Q_DEALER);
+    deal_to(g, &g->hands[0], 0);
+    deal_to(g, &g->dealer, Q_DEALER);
+
+    if (g->dealer.cards[0].rank == 1) g->phase = PHASE_INSURANCE;
+    else                              peek_and_continue(g);
     return true;
 }
 
-static void dealer_play_and_settle(Game* g) {
-    g->reveal = true;
-    g->phase = PHASE_DEALER;
-    while (hand_value(g->dealer, g->dn, NULL) < 17 && g->dn < 12)
-        g->dealer[g->dn++] = deal_card(g);
-
-    int pv = hand_value(g->player, g->pn, NULL);
-    int dv = hand_value(g->dealer, g->dn, NULL);
-    g->phase = PHASE_RESULT;
-    if (dv > 21) {
-        g->bankroll += g->wager * 2; g->last_delta = g->wager;
-        g->result = RES_DEALER_BUST; g->events |= EV_WIN;
-    } else if (pv > dv) {
-        g->bankroll += g->wager * 2; g->last_delta = g->wager;
-        g->result = RES_WIN; g->events |= EV_WIN;
-    } else if (pv == dv) {
-        g->bankroll += g->wager; g->last_delta = 0;
-        g->result = RES_PUSH; g->events |= EV_PUSH;
-    } else {
-        g->last_delta = -g->wager; g->result = RES_LOSE; g->events |= EV_LOSE;
-    }
+bool game_offers_even_money(const Game* g) {
+    return g->phase == PHASE_INSURANCE && game_hand_is_blackjack(&g->hands[0]);
 }
 
-void game_hit(Game* g) {
-    if (g->phase != PHASE_PLAYER) return;
-    if (g->pn < 12) g->player[g->pn++] = deal_card(g);
-    g->events |= EV_HIT;
-    if (hand_value(g->player, g->pn, NULL) > 21) {
-        g->reveal = true; g->result = RES_BUST; g->last_delta = -g->wager;
-        g->phase = PHASE_RESULT; g->events |= EV_BUST;
+bool game_can_insure(const Game* g) {
+    if (g->phase != PHASE_INSURANCE) return false;
+    if (game_offers_even_money(g)) return true;       // costs nothing extra
+    return g->bankroll >= g->hands[0].wager / 2;
+}
+
+void game_insurance(Game* g, bool take) {
+    if (g->phase != PHASE_INSURANCE) return;
+    Hand* p = &g->hands[0];
+    if (game_offers_even_money(g)) {
+        if (take) {
+            // Even money: the natural is paid 1:1 now, whatever the hole card.
+            g->even_money = true;
+            reveal_hole(g);
+            win(g, p, RES_EVEN_MONEY);
+            p->done = true;
+            finish_round(g);
+            return;
+        }
+    } else if (take && game_can_insure(g)) {
+        g->insurance = p->wager / 2;
+        stake(g, g->insurance);
     }
+    peek_and_continue(g);
+}
+
+static Hand* acting(Game* g) {
+    if (g->phase != PHASE_PLAYER || g->active >= g->nhands) return NULL;
+    Hand* h = &g->hands[g->active];
+    return h->done ? NULL : h;
+}
+
+static const Hand* acting_c(const Game* g) { return acting((Game*)g); }
+
+void game_hit(Game* g) {
+    Hand* h = acting(g);
+    if (!h) return;
+    deal_to(g, h, g->active);
+    after_card(g);
+}
+
+void game_stand(Game* g) {
+    Hand* h = acting(g);
+    if (!h) return;
+    h->done = true;
+    advance(g);
+}
+
+bool game_can_double(const Game* g) {
+    const Hand* h = acting_c(g);
+    return h && h->n == 2 && !h->split_aces && g->bankroll >= h->wager;
 }
 
 void game_double(Game* g) {
     if (!game_can_double(g)) return;
-    g->bankroll -= g->bet;
-    g->wager += g->bet;
-    g->doubled = true;
-    if (g->pn < 12) g->player[g->pn++] = deal_card(g);
-    g->events |= EV_HIT;
-    if (hand_value(g->player, g->pn, NULL) > 21) {
-        g->reveal = true; g->result = RES_BUST; g->last_delta = -g->wager;
-        g->phase = PHASE_RESULT; g->events |= EV_BUST;
-        return;
-    }
-    dealer_play_and_settle(g);
+    Hand* h = acting(g);
+    stake(g, h->wager);
+    h->wager *= 2;
+    h->doubled = true;
+    deal_to(g, h, g->active);
+    after_card(g);
 }
 
-void game_stand(Game* g) {
-    if (g->phase != PHASE_PLAYER) return;
-    dealer_play_and_settle(g);
+bool game_can_split(const Game* g) {
+    const Hand* h = acting_c(g);
+    return h && h->n == 2 && g->nhands < MAX_HANDS
+        && card_points(h->cards[0]) == card_points(h->cards[1])
+        && g->bankroll >= h->wager;
+}
+
+void game_split(Game* g) {
+    if (!game_can_split(g)) return;
+    flush_queue(g);
+    int i = g->active;
+    for (int k = g->nhands; k > i + 1; k--) g->hands[k] = g->hands[k - 1];
+
+    Hand* h  = &g->hands[i];
+    Hand* nh = &g->hands[i + 1];
+    bool aces = (h->cards[0].rank == 1);
+    memset(nh, 0, sizeof *nh);
+    nh->cards[0] = h->cards[1];
+    nh->n = nh->vis = 1;
+    nh->at[0] = h->at[1];
+    nh->wager = h->wager;
+    nh->from_split = true;
+    nh->split_aces = aces;
+    h->n = h->vis = 1;
+    h->from_split = true;
+    h->split_aces = aces;
+    g->nhands++;
+    stake(g, h->wager);
+
+    deal_to(g, h, i);
+    after_card(g);   // split aces stop at one card; a 21 stands
+}
+
+bool game_can_surrender(const Game* g) {
+    const Hand* h = acting_c(g);
+    return h && g->rules.surrender && g->nhands == 1 && h->n == 2 && !h->from_split;
+}
+
+void game_surrender(Game* g) {
+    if (!game_can_surrender(g)) return;
+    Hand* h = acting(g);
+    g->bankroll += h->wager / 2;
+    h->delta = -(h->wager / 2);
+    h->result = RES_SURRENDER;
+    h->done = true;
+    advance(g);
 }
 
 void game_next(Game* g) {
     if (g->phase != PHASE_RESULT) return;
-    g->pn = g->dn = 0;
-    g->reveal = false;
-    g->doubled = false;
-    g->result = RES_NONE;
-    g->wager = 0;
-    if (g->bankroll < MIN_BET) { g->bankroll = START_BANKROLL; g->refilled = true; }
-    if (g->bet > g->bankroll) g->bet = g->bankroll;
-    if (g->bet < MIN_BET) g->bet = MIN_BET;
+    flush_queue(g);
+    memset(g->hands, 0, sizeof g->hands);
+    memset(&g->dealer, 0, sizeof g->dealer);
+    g->nhands = 0;
+    g->active = 0;
+    g->hole_up = g->hole_shown = false;
+    g->insurance = g->insurance_delta = 0;
+    g->even_money = false;
+    if (g->bankroll < MIN_BET) {
+        g->bankroll = START_BANKROLL;
+        g->refilled = true;
+    }
+    g->shown_bankroll = g->bankroll;
+    clamp_bet(g);
     g->phase = PHASE_BET;
 }

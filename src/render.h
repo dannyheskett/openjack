@@ -2,38 +2,36 @@
 #define OPENJACK_RENDER_H
 
 #include "game.h"
+#include "layout.h"
+#include "platform.h"
+#include "oj_types.h"
 #include <stdbool.h>
 
-// Fixed card metrics (reused from openklondike) — cards never scale.
-#define CARD_W   80
-#define CARD_H   112
-
-// Minimum window, just big enough for both hands, the HUD and the action row.
-// Both multiples of 16 so the recorder can capture them.
-#define MIN_W    624   // 39 * 16
-#define MIN_H    528   // 33 * 16
-
-// On-screen action buttons (phase-dependent).
-typedef enum {
-    BTN_NONE = 0,
-    BTN_HIT,
-    BTN_STAND,
-    BTN_DOUBLE,
-    BTN_DEAL,        // "Deal" in BET, "Next Hand" in RESULT
-    BTN_BET_DOWN,
-    BTN_BET_UP,
-} Button;
-
+// Window setup and teardown (window.c) plus the recorder's capture canvas. The
+// table fits itself to whatever the window is (layout.c).
 void render_init(void);
 void render_cleanup(void);
-bool render_window_should_close(void);
-void render_toggle_fullscreen(void);
 
+// Scenes -------------------------------------------------------------------
+// The table.
 void render_frame(const Game* g);
-void render_menu(const char* title, const char** labels, int count,
+// The table with a notice panel over it (the bankroll ran out).
+void render_notice(const Game* g, const char* title);
+// The family menu (menu.c) on the felt. gap_before, if >= 0, inserts a blank
+// line before that item index. Hit-test its rows with menu_hit_test().
+void render_menu(const char* title, const char* const* labels, int count,
                  int selected, int gap_before);
 
-// Which active button is under the pixel (BTN_NONE if none / disabled).
-Button render_button_at(const Game* g, int mx, int my);
+// Hit tests ----------------------------------------------------------------
+// The enabled button at a window point, or BTN_NONE.
+Button render_button_at(const Game* g, int x, int y);
+// Bottom edge of the status line in the live window. On touch, a tap above it
+// -- the wordmark bar and the status line -- opens the menu.
+int render_chrome_bottom(void);
+
+// Queries ------------------------------------------------------------------
+// Card width in pixels for the current window. The touch layer scales its
+// tap-movement tolerance from it.
+int render_card_size(void);
 
 #endif
