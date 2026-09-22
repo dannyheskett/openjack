@@ -9,7 +9,7 @@ dist/
 
 # Vendored raylib, built from source by scripts/build_raylib_<platform>.sh
 third_party/raylib/
-third_party/raylib-install*/
+third_party/raylib-install*
 
 # Gameplay recordings written by src/recorder.c into the repo root
 *.mp4
@@ -28,3 +28,26 @@ third_party/raylib-install*/
 *~
 .DS_Store
 Thumbs.db
+
+# --- store signing material ---
+# Never commit these: the release workflow decodes the Play keystore and the
+# Apple distribution certificate from secrets at build time.
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+*.p8
+*.b64
+# ...and the material the signing certificate is built from.
+*.key
+*.csr
+*.cer
+*.pem
+
+# Tooling scratch
+.playwright-mcp/
+__pycache__/
+*.pyc
+
+# Local Playwright link for scripts/gen_store_screenshots.mjs (dev-only)
+node_modules

@@ -1,28 +1,35 @@
+// The whole renderer: chrome, the table, the cards, the buttons, the menu and
+// the notice panel. There is no second layout to dispatch to -- layout.c fits
+// the table to any window, so this file serves desktop, both phone
+// orientations and an iPad, re-deriving everything from the live view size
+// every frame. Every pixel goes through the gfx primitive layer (gfx.h), so the
+// same drawing runs on raylib and on the iOS Metal backend.
 #include "render.h"
-#include "recorder.h"
-#include <raylib.h>
-#include <rlgl.h>
+#include "gfx.h"
+#include "safe_area.h"
+#include "menu.h"
+#include "present.h"
+#include "window.h"
+
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
-
-#define TITLEBAR_H 44
-#define STATUS_H   28
-#define BTN_H      42
-#define SS         2     // recorder supersampling factor
 
 // --------------------------------------------------------------------------
-// Colors
+// Palette: the openklondike set, value for value, so the card games in the
+// family look like they come off the same table; plus the button and result
+// colours openjack has always used.
 // --------------------------------------------------------------------------
-static const Color FELT       = { 12,  92,  52, 255};
-static const Color FELT_DARK  = { 10,  76,  44, 255};
+static const Color FELT       = { 12,  92,  52, 255};  // classic green table
+static const Color FELT_DARK  = { 10,  76,  44, 255};  // title bar
+static const Color SLOT_LINE  = { 30, 110,  66, 255};  // rule under the title bar
 static const Color CARD_FACE  = {248, 248, 242, 255};
 static const Color CARD_EDGE  = { 40,  40,  40, 255};
 static const Color CARD_BACK  = { 36,  72, 156, 255};
 static const Color CARD_BACK2 = { 80, 130, 220, 255};
 static const Color RED_PIP    = {200,  30,  40, 255};
 static const Color BLACK_PIP  = { 20,  20,  24, 255};
-static const Color HILITE     = {255, 235, 120, 255};
+static const Color HILITE     = {255, 235, 120, 255};  // active hand, selection
 static const Color MENU_BG    = { 16,  40,  28, 255};
 static const Color TEXT_LIGHT = {235, 235, 225, 255};
 static const Color TEXT_DIM   = {170, 190, 175, 255};
@@ -32,23 +39,34 @@ static const Color BTN_OFF    = { 16,  70,  48, 255};
 static const Color WIN_COL    = {120, 240, 150, 255};
 static const Color LOSE_COL   = {236, 110, 100, 255};
 
+// Corner radius as a fraction of the card's short side. Scale-invariant, so
+// every card size has the same silhouette.
+#define CARD_ROUND 0.12f
+#define BTN_ROUND  0.25f
+
+static int imax(int a, int b) { return (a > b) ? a : b; }
+
 // --------------------------------------------------------------------------
-// Card art (vector-drawn, reused from openklondike)
+// Card art (all vector-drawn, no asset files): openklondike's, unchanged.
 // --------------------------------------------------------------------------
 static const char* RANK_STR[14] = {
     "", "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"
 };
 
+// Fill a closed polygon as a triangle fan from `c`. Works for any polygon that
+// is star-shaped about `c` (true for all of our pip shapes). gfx_triangle is
+// winding-independent, so the traced direction does not matter.
 static void fill_fan(Vector2 c, const Vector2* p, int n, Color col) {
-    for (int i = 0; i < n; i++) {
-        Vector2 a = p[i], b = p[(i + 1) % n];
-        DrawTriangle(c, a, b, col);
-        DrawTriangle(c, b, a, col);
-    }
+    for (int i = 0; i < n; i++) gfx_triangle(c, p[i], p[(i + 1) % n], col);
 }
 
 #define PIP_SEG 30
 
+// Build a heart outline of total height `s` centred on (cx,cy) into `out`.
+// `xsquash` scales the width independently (1.0 = the curve's natural ~1.1:1
+// width:height; <1 makes it taller and more upright). flip=true points it
+// upward (the spade body). Classic heart curve:
+//   x = 16 sin^3 t,  y = 13 cos t - 5 cos 2t - 2 cos 3t - cos 4t
 static void heart_outline(float cx, float cy, float s, float xsquash, bool flip,
                           Vector2* out) {
     float xs[PIP_SEG], ys[PIP_SEG];
@@ -75,313 +93,456 @@ static void heart_outline(float cx, float cy, float s, float xsquash, bool flip,
     }
 }
 
+// A flared pedestal/stem under the spade and club: a narrow neck widening to
+// outward-kicked feet, like the base on a real card pip.
 static void draw_stem(float cx, float topy, float s, Color col) {
-    float nw = s * 0.05f, fw = s * 0.34f, h = s * 0.26f;
+    float nw = s * 0.05f;   // neck half-width
+    float fw = s * 0.34f;   // foot half-width (flares past the body lobes)
+    float h  = s * 0.26f;
     Vector2 tl = {cx - nw, topy},          tr = {cx + nw, topy};
     Vector2 ml = {cx - nw * 1.4f, topy + h * 0.55f};
     Vector2 mr = {cx + nw * 1.4f, topy + h * 0.55f};
     Vector2 bl = {cx - fw, topy + h},      br = {cx + fw, topy + h};
-    DrawTriangle(tl, ml, mr, col); DrawTriangle(tl, mr, ml, col);
-    DrawTriangle(tl, mr, tr, col); DrawTriangle(tl, tr, mr, col);
-    DrawTriangle(ml, bl, br, col); DrawTriangle(ml, br, bl, col);
-    DrawTriangle(ml, br, mr, col); DrawTriangle(ml, mr, br, col);
+    gfx_triangle(tl, ml, mr, col);   // neck
+    gfx_triangle(tl, mr, tr, col);
+    gfx_triangle(ml, bl, br, col);   // flared foot
+    gfx_triangle(ml, br, mr, col);
 }
 
-static void draw_pip(int cx, int cy, int s, int suit) {
+// Draw one suit pip centred at (cx,cy) with overall height s.
+static void draw_pip(float cx, float cy, float s, int suit) {
     Color col = (suit == 1 || suit == 2) ? RED_PIP : BLACK_PIP;
     Vector2 pts[PIP_SEG];
     switch (suit) {
-        case 1: {
+        case 1: { // diamond -- a filled rhombus, taller than wide
             float hw = s * 0.34f, hh = s * 0.5f;
             Vector2 p[4] = {{cx, cy - hh}, {cx + hw, cy}, {cx, cy + hh}, {cx - hw, cy}};
             fill_fan((Vector2){cx, cy}, p, 4, col);
             break;
         }
-        case 2:
+        case 2: { // heart -- upright, slightly taller than wide
             heart_outline(cx, cy, s, 0.86f, false, pts);
             fill_fan((Vector2){cx, cy + s * 0.10f}, pts, PIP_SEG, col);
             break;
-        case 3: {
-            float body = s * 0.74f, byc = cy - s * 0.10f;
+        }
+        case 3: { // spade -- a narrow upward heart on a flared pedestal
+            float body = s * 0.74f;
+            float byc  = cy - s * 0.10f;
             heart_outline(cx, byc, body, 0.96f, true, pts);
             fill_fan((Vector2){cx, byc - body * 0.10f}, pts, PIP_SEG, col);
             draw_stem(cx, byc + body * 0.30f, s, col);
             break;
         }
-        default: {
+        default: { // clubs -- trefoil of three distinct lobes over a stem
             float cr = s * 0.255f;
-            DrawCircle(cx,                   cy - (int)(s * 0.25f), cr, col);
-            DrawCircle(cx - (int)(s*0.245f), cy + (int)(s * 0.11f), cr, col);
-            DrawCircle(cx + (int)(s*0.245f), cy + (int)(s * 0.11f), cr, col);
+            gfx_circle(cx,                cy - s * 0.25f, cr, col);
+            gfx_circle(cx - s * 0.245f,   cy + s * 0.11f, cr, col);
+            gfx_circle(cx + s * 0.245f,   cy + s * 0.11f, cr, col);
             draw_stem(cx, cy + s * 0.16f, s, col);
             break;
         }
     }
 }
 
-static void draw_card_back(int x, int y) {
-    DrawRectangleRounded((Rectangle){x, y, CARD_W, CARD_H}, 0.12f, 6, CARD_BACK);
-    DrawRectangleRoundedLines((Rectangle){x, y, CARD_W, CARD_H}, 0.12f, 6, CARD_EDGE);
-    int m = 8, ix = x + m, iy = y + m, iw = CARD_W - 2 * m, ih = CARD_H - 2 * m;
-    DrawRectangleLines(ix, iy, iw, ih, CARD_BACK2);
-    for (int gx = ix + 8; gx < ix + iw; gx += 8) DrawLine(gx, iy, gx, iy + ih, CARD_BACK2);
-    for (int gy = iy + 8; gy < iy + ih; gy += 8) DrawLine(ix, gy, ix + iw, gy, CARD_BACK2);
+// Card-relative metrics, all proportional to the card width so the art is the
+// same design at any scale. The floors keep the smallest card legible.
+static int card_index_fs(const Layout* L) { return imax(L->card_w * 18 / 80, 8); }
+static int card_pad(const Layout* L)      { return imax(L->card_w *  6 / 80, 2); }
+static int card_pip_small(const Layout* L){ return imax(L->card_w * 12 / 80, 5); }
+static int card_pip_big(const Layout* L)  { return imax(L->card_w * 34 / 80, 12); }
+
+static void draw_card_back(const Layout* L, int x, int y) {
+    gfx_rect_rounded(x, y, L->card_w, L->card_h, CARD_ROUND, CARD_BACK);
+    gfx_rect_rounded_lines(x, y, L->card_w, L->card_h, CARD_ROUND, CARD_EDGE);
+    // A bounded plaid panel inside the card (never spills past its edges).
+    int m = imax(L->card_w * 8 / 80, 3);
+    int ix = x + m, iy = y + m, iw = L->card_w - 2 * m, ih = L->card_h - 2 * m;
+    if (iw <= 0 || ih <= 0) return;
+    gfx_rect_lines(ix, iy, iw, ih, CARD_BACK2);
+    int step = m;
+    for (int gx = ix + step; gx < ix + iw; gx += step)
+        gfx_line(gx, iy, gx, iy + ih, CARD_BACK2);
+    for (int gy = iy + step; gy < iy + ih; gy += step)
+        gfx_line(ix, gy, ix + iw, gy, CARD_BACK2);
 }
 
-static void draw_card_face(int x, int y, Card c) {
-    DrawRectangleRounded((Rectangle){x, y, CARD_W, CARD_H}, 0.12f, 6, CARD_FACE);
-    DrawRectangleRoundedLines((Rectangle){x, y, CARD_W, CARD_H}, 0.12f, 6, CARD_EDGE);
+static void draw_card_face(const Layout* L, int x, int y, Card c, bool hilite) {
+    gfx_rect_rounded(x, y, L->card_w, L->card_h, CARD_ROUND, CARD_FACE);
+    Color edge = hilite ? HILITE : CARD_EDGE;
+    gfx_rect_rounded_lines(x, y, L->card_w, L->card_h, CARD_ROUND, edge);
+    if (hilite)
+        gfx_rect_rounded_lines(x + 1, y + 1, L->card_w - 2, L->card_h - 2,
+                               CARD_ROUND, edge);
+
     Color col = card_is_red(c) ? RED_PIP : BLACK_PIP;
     const char* rs = RANK_STR[c.rank];
-    int fs = 18;
-    DrawText(rs, x + 6, y + 4, fs, col);
-    draw_pip(x + 12, y + 4 + fs + 8, 12, c.suit);
-    int tw = MeasureText(rs, fs);
-    DrawText(rs, x + CARD_W - 6 - tw, y + CARD_H - 4 - fs, fs, col);
-    draw_pip(x + CARD_W - 12, y + CARD_H - 4 - fs - 8, 12, c.suit);
-    draw_pip(x + CARD_W / 2, y + CARD_H / 2, 34, c.suit);
+    int fs   = card_index_fs(L);
+    int pad  = card_pad(L);
+    int psm  = card_pip_small(L);
+    int gapy = imax(L->card_w * 8 / 80, 3);
+
+    // Top-left corner index, and the matching bottom-right one (upright; simple
+    // and readable at every size).
+    gfx_text(rs, x + pad, y + pad * 2 / 3, fs, col);
+    draw_pip(x + pad + psm * 0.5f, y + pad * 2 / 3 + fs + gapy, (float)psm, c.suit);
+    int tw = gfx_measure_text(rs, fs);
+    gfx_text(rs, x + L->card_w - pad - tw, y + L->card_h - pad * 2 / 3 - fs, fs, col);
+    draw_pip(x + L->card_w - pad - psm * 0.5f,
+             y + L->card_h - pad * 2 / 3 - fs - gapy, (float)psm, c.suit);
+
+    // Large centre pip.
+    draw_pip(x + L->card_w / 2.0f, y + L->card_h / 2.0f, (float)card_pip_big(L), c.suit);
 }
 
 // --------------------------------------------------------------------------
-// Table layout
+// Card motion. A dealt card slides in from the shoe over DEAL_STEPS fixed
+// steps, easing out; the hole card turns over FLIP_STEPS, squeezed
+// horizontally through the middle of the turn. Both are timed from the game's
+// own step counter, so pausing in the menu pauses them too.
 // --------------------------------------------------------------------------
-#define DEALER_Y 76
-#define PLAYER_Y 260
+static float progress(const Game* g, int since, int steps) {
+    float p = (float)(g->ticks - since) / (float)steps;
+    return (p < 0.0f) ? 0.0f : (p > 1.0f) ? 1.0f : p;
+}
 
-static void draw_hand(const Card* h, int n, int y, int view_w, int hide_index) {
-    if (n <= 0) return;
-    float fan = CARD_W * 0.42f;
-    float width = CARD_W + (n - 1) * fan;
-    float maxw = view_w - 48;
-    if (width > maxw && n > 1) { fan = (maxw - CARD_W) / (n - 1); width = CARD_W + (n - 1) * fan; }
-    int x0 = (int)((view_w - width) / 2);
-    for (int i = 0; i < n; i++) {
-        int x = x0 + (int)(i * fan);
-        if (i == hide_index) draw_card_back(x, y);
-        else                 draw_card_face(x, y, h[i]);
+static void slide(const Layout* L, const Game* g, int at, int* x, int* y) {
+    float p = progress(g, at, DEAL_STEPS);
+    float e = 1.0f - (1.0f - p) * (1.0f - p);
+    *x = (int)(L->shoe_x + (*x - L->shoe_x) * e);
+    *y = (int)(L->shoe_y + (*y - L->shoe_y) * e);
+}
+
+// The hole card: a back until it turns, then the squeeze, then the face.
+static void draw_hole_card(const Layout* L, const Game* g, int x, int y, Card c) {
+    if (!g->hole_shown) { draw_card_back(L, x, y); return; }
+    float q = progress(g, g->hole_at, FLIP_STEPS);
+    if (q >= 1.0f) { draw_card_face(L, x, y, c, false); return; }
+    float squeeze = fabsf(q * 2.0f - 1.0f);
+    int w = (int)(L->card_w * squeeze);
+    if (w < 2) w = 2;
+    int dx = x + (L->card_w - w) / 2;
+    gfx_rect_rounded(dx, y, w, L->card_h, CARD_ROUND, (q < 0.5f) ? CARD_BACK : CARD_FACE);
+    gfx_rect_rounded_lines(dx, y, w, L->card_h, CARD_ROUND, CARD_EDGE);
+}
+
+// --------------------------------------------------------------------------
+// Text helpers
+// --------------------------------------------------------------------------
+// Largest size <= fs at which `text` fits `max_w`.
+static int fit_fs(const char* text, int fs, int max_w) {
+    while (fs > 8 && gfx_measure_text(text, fs) > max_w) fs--;
+    return fs;
+}
+
+static void text_centered(const char* text, int cx, int y, int fs, int max_w, Color c) {
+    fs = fit_fs(text, fs, max_w);
+    gfx_text(text, cx - gfx_measure_text(text, fs) / 2, y, fs, c);
+}
+
+// A total as the player reads it: "7/17" while a soft hand can still take a
+// card, "Blackjack" for a natural, otherwise the number.
+static void format_total(char* buf, int cap, int total, bool soft, bool natural, bool open) {
+    if (natural)                          snprintf(buf, cap, "Blackjack");
+    else if (soft && total < 21 && open)  snprintf(buf, cap, "%d/%d", total - 10, total);
+    else                                  snprintf(buf, cap, "%d", total);
+}
+
+static const char* result_word(Result r) {
+    switch (r) {
+    case RES_BLACKJACK:   return "Blackjack";
+    case RES_EVEN_MONEY:  return "Even money";
+    case RES_WIN:         return "Win";
+    case RES_DEALER_BUST: return "Win";
+    case RES_PUSH:        return "Push";
+    case RES_LOSE:        return "Lose";
+    case RES_BUST:        return "Bust";
+    case RES_SURRENDER:   return "Surrender";
+    default:              return "";
     }
 }
 
-// Phase-dependent action buttons. Returns count; fills ids/rects/labels/enabled.
-typedef struct { Button id; Rectangle r; const char* label; bool on; } Btn;
+static Color delta_color(int d) { return (d > 0) ? WIN_COL : (d < 0) ? LOSE_COL : TEXT_LIGHT; }
 
-static int build_buttons(const Game* g, int view_w, int view_h, Btn* out) {
-    int y = view_h - STATUS_H - 14 - BTN_H;
-    int n = 0;
-    Btn b[4];
-    if (g->phase == PHASE_BET) {
-        b[n++] = (Btn){ BTN_BET_DOWN, { 0, 0, 48,  BTN_H }, "-",    g->bet > MIN_BET };
-        b[n++] = (Btn){ BTN_DEAL,     { 0, 0, 150, BTN_H }, "Deal", g->bankroll >= MIN_BET };
-        b[n++] = (Btn){ BTN_BET_UP,   { 0, 0, 48,  BTN_H }, "+",    g->bet < g->bankroll };
-    } else if (g->phase == PHASE_PLAYER) {
-        b[n++] = (Btn){ BTN_HIT,    { 0, 0, 120, BTN_H }, "Hit",    true };
-        b[n++] = (Btn){ BTN_STAND,  { 0, 0, 120, BTN_H }, "Stand",  true };
-        b[n++] = (Btn){ BTN_DOUBLE, { 0, 0, 120, BTN_H }, "Double", game_can_double(g) };
-    } else if (g->phase == PHASE_RESULT) {
-        b[n++] = (Btn){ BTN_DEAL, { 0, 0, 180, BTN_H }, "Next Hand", true };
-    }
-    int gap = 16, total = 0;
-    for (int i = 0; i < n; i++) total += (int)b[i].r.width + (i ? gap : 0);
-    int x = (view_w - total) / 2;
-    for (int i = 0; i < n; i++) {
-        b[i].r.x = x; b[i].r.y = y;
-        x += (int)b[i].r.width + gap;
-        out[i] = b[i];
-    }
-    return n;
-}
-
-static void draw_button(Btn b) {
-    DrawRectangleRounded(b.r, 0.25f, 6, b.on ? BTN_FILL : BTN_OFF);
-    DrawRectangleRoundedLines(b.r, 0.25f, 6, b.on ? BTN_EDGE : FELT_DARK);
-    int fs = 20, tw = MeasureText(b.label, fs);
-    DrawText(b.label, (int)(b.r.x + (b.r.width - tw) / 2),
-             (int)(b.r.y + (b.r.height - fs) / 2), fs, b.on ? TEXT_LIGHT : TEXT_DIM);
-}
-
-static void result_text(const Game* g, char* buf, int cap, Color* col) {
-    int d = g->last_delta < 0 ? -g->last_delta : g->last_delta;
-    *col = (g->last_delta > 0) ? WIN_COL : (g->last_delta < 0 ? LOSE_COL : TEXT_LIGHT);
-    switch (g->result) {
-        case RES_BLACKJACK:   snprintf(buf, cap, "Blackjack!  +$%d", d); break;
-        case RES_WIN:         snprintf(buf, cap, "You win  +$%d", d); break;
-        case RES_DEALER_BUST: snprintf(buf, cap, "Dealer busts  +$%d", d); break;
-        case RES_PUSH:        snprintf(buf, cap, "Push"); break;
-        case RES_BUST:        snprintf(buf, cap, "Bust  -$%d", d); break;
-        case RES_LOSE:        snprintf(buf, cap, "You lose  -$%d", d); break;
-        default:              buf[0] = 0; break;
-    }
-}
-
-static void draw_table(void* vctx, int view_w, int view_h) {
-    const Game* g = (const Game*)vctx;
-    ClearBackground(FELT);
-
-    // title
-    DrawRectangle(0, 0, view_w, TITLEBAR_H, FELT_DARK);
-    DrawLine(0, TITLEBAR_H, view_w, TITLEBAR_H, (Color){40, 40, 40, 255});
+// --------------------------------------------------------------------------
+// Chrome
+// --------------------------------------------------------------------------
+static void draw_title_bar(const Layout* l) {
+    gfx_rect(0, 0, l->view_w, l->titlebar_h, FELT_DARK);
+    gfx_line(0, l->titlebar_h, l->view_w, l->titlebar_h, SLOT_LINE);
     const char* title = "OPENJACK";
-    DrawText(title, view_w / 2 - MeasureText(title, 22) / 2, (TITLEBAR_H - 22) / 2, 22, TEXT_LIGHT);
+    int fs = l->title_fs;
+    int tw = gfx_measure_text(title, fs);
+    int ty = (l->titlebar_h - fs) / 2;
 
-    bool playing = (g->phase != PHASE_BET) || g->pn > 0;
-    char buf[64];
-
-    // dealer
-    if (playing) {
-        int shown = g->reveal ? game_dealer_value(g) : game_dealer_shown(g);
-        snprintf(buf, sizeof buf, g->reveal ? "Dealer  %d" : "Dealer  %d +", shown);
-        DrawText(buf, 24, TITLEBAR_H + 8, 20, TEXT_DIM);
-        draw_hand(g->dealer, g->dn, DEALER_Y, view_w, g->reveal ? -1 : 1);
-    } else {
-        DrawText("Place your bet", view_w / 2 - MeasureText("Place your bet", 20) / 2,
-                 DEALER_Y + CARD_H / 2 - 10, 20, TEXT_DIM);
+    // Keep the wordmark clear of a camera cutout: if the centre is taken, put
+    // it on whichever side has room, and if neither has, leave the bar bare.
+    SafeArea sa = safe_area_get();
+    int cx = (l->view_w - tw) / 2;
+    if (sa.cutout_right > sa.cutout_left) {
+        int pad = fs / 2;
+        bool clash = !(cx + tw + pad <= sa.cutout_left || cx >= sa.cutout_right + pad);
+        if (clash) {
+            if (sa.cutout_left >= tw + pad) cx = sa.cutout_left - pad - tw;
+            else if (l->view_w - sa.cutout_right >= tw + pad) cx = sa.cutout_right + pad;
+            else return;
+        }
     }
+    gfx_text(title, cx, ty, fs, TEXT_LIGHT);
+}
 
-    // result message (center)
-    if (g->phase == PHASE_RESULT) {
-        char rt[64]; Color rc;
-        result_text(g, rt, sizeof rt, &rc);
-        DrawText(rt, view_w / 2 - MeasureText(rt, 28) / 2, PLAYER_Y - 56, 28, rc);
-    }
+// Chips at risk this round: every hand's wager plus any insurance.
+static int at_risk(const Game* g) {
+    if (g->phase == PHASE_BET) return g->bet;
+    int sum = g->insurance;
+    for (int i = 0; i < g->nhands; i++) sum += g->hands[i].wager;
+    return sum;
+}
 
-    // player
-    if (playing) {
-        snprintf(buf, sizeof buf, "You  %d", game_player_value(g));
-        DrawText(buf, 24, PLAYER_Y - 28, 20, TEXT_LIGHT);
-        draw_hand(g->player, g->pn, PLAYER_Y, view_w, -1);
-    }
+static void draw_status(const Game* g, const Layout* l) {
+    char buf[48];
+    int fs = l->status_fs;
+    int y = l->status_y + (l->status_h - fs) / 2;
+    SafeArea sa = safe_area_get();
+    int left = l->margin + sa.left;
+    int right = l->view_w - l->margin - sa.right;
 
-    // buttons
-    Btn btns[4];
-    int nb = build_buttons(g, view_w, view_h, btns);
-    for (int i = 0; i < nb; i++) draw_button(btns[i]);
+    snprintf(buf, sizeof buf, "Bankroll %d", g->shown_bankroll);
+    gfx_text(buf, left, y, fs, TEXT_LIGHT);
 
-    // status bar
-    int sy = view_h - STATUS_H + 4;
-    DrawRectangle(0, view_h - STATUS_H, view_w, STATUS_H, FELT_DARK);
-    snprintf(buf, sizeof buf, "Bankroll $%d", g->bankroll);
-    DrawText(buf, 24, sy, 18, TEXT_LIGHT);
-    snprintf(buf, sizeof buf, "Bet $%d", g->bet);
-    DrawText(buf, view_w / 2 - MeasureText(buf, 18) / 2, sy, 18, HILITE);
-    const char* hint = (g->phase == PHASE_PLAYER) ? "H Hit   S Stand   D Double"
-                     : (g->phase == PHASE_BET)    ? "Enter Deal"
-                     : "Enter Next";
-    DrawText(hint, view_w - 24 - MeasureText(hint, 18), sy, 18, TEXT_DIM);
+    snprintf(buf, sizeof buf, "Bet %d", at_risk(g));
+    gfx_text(buf, right - gfx_measure_text(buf, fs), y, fs, TEXT_DIM);
 }
 
 // --------------------------------------------------------------------------
-// Presentation: window + SSAA-supersampled capture canvas
+// The table
 // --------------------------------------------------------------------------
-typedef void (*SceneFn)(void* ctx, int w, int h);
+static bool round_over(const Game* g) { return g->phase == PHASE_RESULT && g->settled_shown; }
 
-static RenderTexture2D rec_canvas, rec_super;
-static bool rec_ready = false;
+static void draw_dealer(const Game* g, const Layout* l) {
+    const Hand* d = &g->dealer;
+    if (d->vis == 0) return;
 
-static void emit(SceneFn fn, void* ctx) {
-    BeginDrawing();
-    fn(ctx, GetScreenWidth(), GetScreenHeight());
-    EndDrawing();
+    char tot[24], buf[48];
+    bool soft;
+    int t = game_visible_total(g, d, &soft);
+    bool natural = g->hole_shown && game_hand_is_blackjack(d);
+    format_total(tot, sizeof tot, t, false, natural, false);
+    snprintf(buf, sizeof buf, "Dealer  %s", tot);
+    text_centered(buf, l->table_x + l->table_w / 2,
+                  l->dealer_label_y + (l->label_h - l->label_fs) / 2,
+                  l->label_fs, l->table_w, TEXT_DIM);
 
-    if (recorder_active() && rec_ready) {
-        BeginTextureMode(rec_super);
-        rlPushMatrix();
-        rlScalef((float)SS, (float)SS, 1.0f);
-        fn(ctx, MIN_W, MIN_H);
-        rlPopMatrix();
-        EndTextureMode();
-
-        BeginTextureMode(rec_canvas);
-        Rectangle src = {0, 0, (float)(SS * MIN_W), -(float)(SS * MIN_H)};
-        Rectangle dst = {0, 0, (float)MIN_W, (float)MIN_H};
-        DrawTexturePro(rec_super.texture, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
-        EndTextureMode();
-        recorder_capture(&rec_canvas);
+    for (int i = 0; i < d->vis; i++) {
+        int x = layout_dealer_card_x(l, d->n, i), y = l->dealer_y;
+        slide(l, g, d->at[i], &x, &y);
+        if (i == 1) draw_hole_card(l, g, x, y, d->cards[1]);
+        else        draw_card_face(l, x, y, d->cards[i], false);
     }
+}
+
+static void draw_hands(const Game* g, const Layout* l) {
+    for (int h = 0; h < g->nhands; h++) {
+        const Hand* hand = &g->hands[h];
+        int sx, sy, sw;
+        layout_hand_slot(l, g->nhands, h, &sx, &sy, &sw);
+        bool active = (g->phase == PHASE_PLAYER && g->nhands > 1 && h == g->active);
+
+        for (int i = 0; i < hand->vis; i++) {
+            int x = layout_card_x(l, sx, sw, hand->n, i), y = sy;
+            slide(l, g, hand->at[i], &x, &y);
+            draw_card_face(l, x, y, hand->cards[i], active);
+        }
+        if (hand->vis == 0) continue;
+
+        // The total under the hand; once the round is shown, its result too
+        // when there is more than one hand (a single hand's result is in the
+        // message band).
+        char tot[24], buf[64];
+        bool soft;
+        int t = game_visible_total(g, hand, &soft);
+        bool natural = (hand->vis == hand->n) && game_hand_is_blackjack(hand);
+        format_total(tot, sizeof tot, t, soft, natural, !hand->done);
+        Color c = active ? HILITE : TEXT_LIGHT;
+        if (round_over(g) && g->nhands > 1) {
+            snprintf(buf, sizeof buf, "%s  %s", tot, result_word(hand->result));
+            c = delta_color(hand->delta);
+        } else if (hand->doubled) {
+            snprintf(buf, sizeof buf, "%s  x2", tot);
+        } else {
+            snprintf(buf, sizeof buf, "%s", tot);
+        }
+        text_centered(buf, sx + sw / 2, sy + l->card_h + (l->label_h - l->label_fs) / 2,
+                      l->label_fs, sw, c);
+    }
+}
+
+// One line between the dealer and the player: what to do, or what happened.
+static void draw_message(const Game* g, const Layout* l) {
+    char buf[96];
+    Color c = TEXT_DIM;
+    buf[0] = 0;
+
+    if (g->phase == PHASE_BET) {
+        snprintf(buf, sizeof buf, "Place your bet");
+    } else if (g->phase == PHASE_INSURANCE && !game_busy(g)) {
+        snprintf(buf, sizeof buf, game_offers_even_money(g) ? "Even money?" : "Insurance?");
+        c = HILITE;
+    } else if (g->phase == PHASE_PLAYER && g->nhands > 1) {
+        snprintf(buf, sizeof buf, "Hand %d of %d", g->active + 1, g->nhands);
+    } else if (round_over(g)) {
+        int d = g->last_delta;
+        c = delta_color(d);
+        const Hand* h = &g->hands[0];
+        bool dealer_bj = game_hand_is_blackjack(&g->dealer);
+        char head[48];
+        if (g->nhands > 1) {
+            snprintf(head, sizeof head, (d > 0) ? "You win %+d" : (d < 0) ? "You lose %+d" : "Even", d);
+        } else {
+            int hd = h->delta;
+            switch (h->result) {
+            case RES_BLACKJACK:   snprintf(head, sizeof head, "Blackjack! %+d", hd); break;
+            case RES_EVEN_MONEY:  snprintf(head, sizeof head, "Even money %+d", hd); break;
+            case RES_WIN:         snprintf(head, sizeof head, "You win %+d", hd); break;
+            case RES_DEALER_BUST: snprintf(head, sizeof head, "Dealer busts %+d", hd); break;
+            case RES_PUSH:        snprintf(head, sizeof head, "Push"); break;
+            case RES_BUST:        snprintf(head, sizeof head, "Bust %+d", hd); break;
+            case RES_SURRENDER:   snprintf(head, sizeof head, "Surrendered %+d", hd); break;
+            default:              snprintf(head, sizeof head, dealer_bj ? "Dealer blackjack %+d"
+                                                                        : "Dealer wins %+d", hd); break;
+            }
+        }
+        if (g->insurance > 0)
+            snprintf(buf, sizeof buf, "%s  Insurance %+d", head, g->insurance_delta);
+        else
+            snprintf(buf, sizeof buf, "%s", head);
+    }
+    if (buf[0])
+        text_centered(buf, l->table_x + l->table_w / 2, l->msg_y + (l->msg_h - l->msg_fs) / 2,
+                      l->msg_fs, l->table_w, c);
+
+#ifdef OJ_TOUCH
+    // The menu gesture is not discoverable on its own, so the first hands say
+    // where it is, in the empty row where the player's cards will land.
+    if (g->phase == PHASE_BET && g->hands_played < 3)
+        text_centered("Tap the title bar or two-finger tap for the menu",
+                      l->table_x + l->table_w / 2, l->player_y + (l->card_h - l->label_fs) / 2,
+                      l->label_fs, l->table_w, TEXT_DIM);
+#endif
+}
+
+static const char* button_label(const Game* g, Button id) {
+    switch (id) {
+    case BTN_HIT:       return "Hit";
+    case BTN_STAND:     return "Stand";
+    case BTN_DOUBLE:    return "Double";
+    case BTN_SPLIT:     return "Split";
+    case BTN_SURRENDER: return "Surrender";
+    case BTN_INSURE:    return game_offers_even_money(g) ? "Even Money" : "Insurance";
+    case BTN_DECLINE:   return "No Thanks";
+    case BTN_BET_DOWN:  return "-";
+    case BTN_DEAL:      return "Deal";
+    case BTN_BET_UP:    return "+";
+    case BTN_NEXT:      return "Next Hand";
+    default:            return "";
+    }
+}
+
+static void draw_buttons(const Game* g, const Layout* l) {
+    Btn b[MAX_BUTTONS];
+    int n = layout_buttons(l, g, b);
+    for (int i = 0; i < n; i++) {
+        gfx_rect_rounded(b[i].x, b[i].y, b[i].w, b[i].h, BTN_ROUND, b[i].on ? BTN_FILL : BTN_OFF);
+        gfx_rect_rounded_lines(b[i].x, b[i].y, b[i].w, b[i].h, BTN_ROUND, b[i].on ? BTN_EDGE : FELT_DARK);
+        const char* label = button_label(g, b[i].id);
+        int fs = fit_fs(label, l->btn_fs, b[i].w - l->btn_fs);
+        gfx_text(label, b[i].x + (b[i].w - gfx_measure_text(label, fs)) / 2,
+                 b[i].y + (b[i].h - fs) / 2, fs, b[i].on ? TEXT_LIGHT : TEXT_DIM);
+    }
+}
+
+// --------------------------------------------------------------------------
+// Menu + notice panel (menu.c, the same in every game in this family)
+// --------------------------------------------------------------------------
+static MenuTheme menu_theme(void) {
+    MenuTheme t = { .background = FELT, .panel = MENU_BG, .edge = TEXT_DIM,
+                    .title = TEXT_LIGHT, .item = TEXT_DIM, .selected = HILITE };
+    return t;
+}
+
+// --------------------------------------------------------------------------
+// Scenes
+// --------------------------------------------------------------------------
+typedef struct {
+    const Game* g;
+    const char* panel_title;
+} TableCtx;
+
+static void draw_table_scene(void* vctx, int view_w, int view_h) {
+    TableCtx* ctx = (TableCtx*)vctx;
+    const Game* g = ctx->g;
+    Layout l = layout_for_hands(view_w, view_h, g->nhands);
+
+    gfx_clear(FELT);
+    draw_title_bar(&l);
+    draw_status(g, &l);
+    draw_dealer(g, &l);
+    draw_message(g, &l);
+    draw_hands(g, &l);
+    if (!ctx->panel_title) draw_buttons(g, &l);
+
+    if (ctx->panel_title) {
+        MenuTheme t = menu_theme();
+#ifdef OJ_TOUCH
+        const char* sub = "Tap to continue";
+#else
+        const char* sub = "Press any key";
+#endif
+        menu_draw_notice(&t, view_w, view_h, ctx->panel_title, sub);
+    }
+}
+
+// --------------------------------------------------------------------------
+// Public entry points
+// --------------------------------------------------------------------------
+void render_frame(const Game* g) {
+    TableCtx ctx = { g, NULL };
+    present(draw_table_scene, &ctx);
+}
+
+void render_notice(const Game* g, const char* title) {
+    TableCtx ctx = { g, title };
+    present(draw_table_scene, &ctx);
+}
+
+void render_menu(const char* title, const char* const* labels, int count,
+                 int selected, int gap_before) {
+    MenuTheme t = menu_theme();
+    menu_show(&t, title, labels, count, selected, gap_before);
+}
+
+Button render_button_at(const Game* g, int x, int y) {
+    Layout l = layout_for(GetScreenWidth(), GetScreenHeight());
+    return layout_button_at(&l, g, x, y);
+}
+
+int render_chrome_bottom(void) {
+    Layout l = layout_for(GetScreenWidth(), GetScreenHeight());
+    return l.status_y + l.status_h;
+}
+
+int render_card_size(void) {
+    return layout_for(GetScreenWidth(), GetScreenHeight()).card_w;
 }
 
 // --------------------------------------------------------------------------
 // Lifecycle
 // --------------------------------------------------------------------------
 void render_init(void) {
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
-    InitWindow(MIN_W, MIN_H, "openjack");
-    SetWindowMinSize(MIN_W, MIN_H);
-    SetTargetFPS(60);
-    SetExitKey(KEY_NULL);
-    rec_canvas = LoadRenderTexture(MIN_W, MIN_H);
-    rec_super  = LoadRenderTexture(SS * MIN_W, SS * MIN_H);
-    SetTextureFilter(rec_super.texture, TEXTURE_FILTER_BILINEAR);
-    rec_ready = true;
+    window_init(GAME_NAME);
+    present_init();
 }
 
 void render_cleanup(void) {
-    if (rec_ready) { UnloadRenderTexture(rec_canvas); UnloadRenderTexture(rec_super); }
-    CloseWindow();
-}
-
-bool render_window_should_close(void) { return WindowShouldClose(); }
-
-void render_toggle_fullscreen(void) {
-    if (IsWindowFullscreen()) {
-        ToggleFullscreen();
-        SetWindowSize(MIN_W, MIN_H);
-    } else {
-        int m = GetCurrentMonitor();
-        SetWindowSize(GetMonitorWidth(m), GetMonitorHeight(m));
-        ToggleFullscreen();
-    }
-}
-
-// --------------------------------------------------------------------------
-// Public scenes
-// --------------------------------------------------------------------------
-void render_frame(const Game* g) { emit(draw_table, (void*)g); }
-
-typedef struct {
-    const char* title; const char** labels;
-    int count; int selected; int gap_before;
-} MenuCtx;
-
-static void draw_menu(void* vctx, int view_w, int view_h) {
-    MenuCtx* m = (MenuCtx*)vctx;
-    ClearBackground(FELT);
-    int cx = view_w / 2, line_h = 32, title_size = 46;
-    int extra = (m->gap_before >= 0) ? 1 : 0;
-    int panel_w = 400;
-    int panel_h = title_size + 40 + (m->count + extra) * line_h + 60;
-    int px = cx - panel_w / 2, py = (view_h - panel_h) / 2;
-    DrawRectangleRounded((Rectangle){px, py, panel_w, panel_h}, 0.05f, 8, MENU_BG);
-    DrawRectangleRoundedLines((Rectangle){px, py, panel_w, panel_h}, 0.05f, 8, TEXT_DIM);
-    DrawText(m->title, cx - MeasureText(m->title, title_size) / 2, py + 26, title_size, TEXT_LIGHT);
-    int y = py + 26 + title_size + 26;
-    for (int i = 0; i < m->count; i++) {
-        if (m->gap_before == i) y += line_h;
-        int size = 22, lw = MeasureText(m->labels[i], size);
-        Color col = (i == m->selected) ? HILITE : TEXT_DIM;
-        if (i == m->selected) {
-            DrawText(">", cx - lw / 2 - 28, y, size, HILITE);
-            DrawText("<", cx + lw / 2 + 14, y, size, HILITE);
-        }
-        DrawText(m->labels[i], cx - lw / 2, y, size, col);
-        y += line_h;
-    }
-}
-
-void render_menu(const char* title, const char** labels, int count,
-                 int selected, int gap_before) {
-    MenuCtx ctx = { title, labels, count, selected, gap_before };
-    emit(draw_menu, &ctx);
-}
-
-// --------------------------------------------------------------------------
-// Hit test
-// --------------------------------------------------------------------------
-Button render_button_at(const Game* g, int mx, int my) {
-    Btn btns[4];
-    int nb = build_buttons(g, GetScreenWidth(), GetScreenHeight(), btns);
-    for (int i = 0; i < nb; i++)
-        if (btns[i].on && mx >= btns[i].r.x && mx < btns[i].r.x + btns[i].r.width
-            && my >= btns[i].r.y && my < btns[i].r.y + btns[i].r.height)
-            return btns[i].id;
-    return BTN_NONE;
+    present_cleanup();
+    window_close();
 }
