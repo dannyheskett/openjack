@@ -93,6 +93,7 @@ typedef struct {
     bool quit;
     SimClock clock;    // fixed-timestep accumulator (only advanced while playing)
     double prev_time;  // GetTime() at the previous frame; 0 before the first
+    int  last_mouse_x, last_mouse_y;  // to notice a mouse and drop the hint
 } AppCtx;
 
 static void app_ctx_init(AppCtx* c) {
@@ -103,6 +104,7 @@ static void app_ctx_init(AppCtx* c) {
     c->quit = false;
     sim_clock_reset(&c->clock);
     c->prev_time = 0.0;
+    c->last_mouse_x = c->last_mouse_y = 0;
 }
 
 static void start_new_game(AppCtx* c) {
@@ -186,6 +188,15 @@ static void frame_step(void* arg) {
 
     Input in = input_poll();
     if (in.fullscreen_toggle) window_toggle_fullscreen();
+
+    // A mouse means the player is not on a touch screen, so the tap-the-title
+    // hint would be wrong. The web build is the case that matters: it carries
+    // the touch UI but runs in desktop browsers too.
+    if (in.left_pressed || in.mouse_x != c->last_mouse_x || in.mouse_y != c->last_mouse_y) {
+        if (c->prev_time > 0.0) render_set_menu_hint(false);
+        c->last_mouse_x = in.mouse_x;
+        c->last_mouse_y = in.mouse_y;
+    }
 
     bool resumable = (c->game != NULL);
     const char* labels[MAX_MENU_ITEMS];

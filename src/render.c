@@ -376,6 +376,12 @@ static void draw_hands(const Game* g, const Layout* l) {
     }
 }
 
+// Whether to draw the menu hint (see render.h). On by default, so a build that
+// only ever sees touch shows it.
+static bool s_menu_hint = true;
+
+void render_set_menu_hint(bool show) { s_menu_hint = show; }
+
 // One line between the dealer and the player: what to do, or what happened.
 static void draw_message(const Game* g, const Layout* l) {
     char buf[96];
@@ -423,7 +429,7 @@ static void draw_message(const Game* g, const Layout* l) {
 #ifdef OJ_TOUCH
     // The menu gesture is not discoverable on its own, so the first hands say
     // where it is, in the empty row where the player's cards will land.
-    if (g->phase == PHASE_BET && g->hands_played < 3)
+    if (s_menu_hint && g->phase == PHASE_BET && g->hands_played < 3)
         text_centered("Tap the title bar or two-finger tap for the menu",
                       l->table_x + l->table_w / 2, l->player_y + (l->card_h - l->label_fs) / 2,
                       l->label_fs, l->table_w, TEXT_DIM);
