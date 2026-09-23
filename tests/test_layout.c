@@ -128,6 +128,14 @@ static void check_table(const char* name, int w, int h) {
                 int cx = layout_card_x(&l, sx, sw, 6, c);
                 CHECK(cx >= sx && cx + l.card_w <= sx + sw);
             }
+            // A two-card hand never closes tighter than 2/5 of a card, what
+            // the cards are sized against, however many hands share the row.
+            int step2 = layout_card_x(&l, sx, sw, 2, 1) - layout_card_x(&l, sx, sw, 2, 0);
+            if (step2 < l.card_w * 2 / 5) {
+                printf("  FAIL %s %dx%d: %d hands, fan %d < 2/5 of %d\n", name, w, h, n, step2, l.card_w);
+                failures++;
+            }
+            if (n == 1) CHECK(step2 == l.fan);   // a lone hand gets the full fan
             for (int j = 0; j < i; j++) CHECK(!overlaps(slots[i], slots[j]));
         }
     }
