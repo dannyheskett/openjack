@@ -23,10 +23,15 @@ static int top_bar_of(int ref) {
     return (s.top > bar) ? s.top : bar;
 }
 
-// Cards in a hand overlap by all but 2/5 of a card: enough to read each
-// card's corner index.
-#define FAN_NUM 2
-#define FAN_DEN 5
+// Each card in a hand shows 3/4 of itself under the next one: the rank, the
+// suit and the centre pip. Cards are sized against a tighter 2/5, enough to
+// read the corner index, so the looser fan costs no card size: where a slot is
+// too narrow for it (split hands on an upright phone) the fan closes up toward
+// 2/5 instead (layout_card_x).
+#define FAN_NUM 3
+#define FAN_DEN 4
+#define FIT_FAN_NUM 2
+#define FIT_FAN_DEN 5
 
 #define MIN_CARD_W 16
 
@@ -68,7 +73,7 @@ static Layout arrange(const Layout* base, bool side, int hand_rows) {
     int per_row = MAX_HANDS / hand_rows;
     int slot_gap = 2 * l.gap;
     int slot = (l.table_w - (per_row - 1) * slot_gap) / per_row;
-    int cw_w = slot * FAN_DEN / (FAN_DEN + FAN_NUM);
+    int cw_w = slot * FIT_FAN_DEN / (FIT_FAN_DEN + FIT_FAN_NUM);
 
     // Height: the dealer's row and every row of hands, each with its total,
     // around the message band.

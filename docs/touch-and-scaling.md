@@ -21,8 +21,10 @@ and keeps the arrangement with the biggest cards. The shapes in the right-hand
 column are what the solver picks, not rules written into it.
 
 Cards are sized for four hands of two cards, whatever is dealt, so a split never
-shrinks the cards or moves the dealer. A hand longer than its slot compresses
-its fan instead of overflowing. When a view keeps a second row for split hands
+shrinks the cards or moves the dealer. Each card shows 3/4 of itself under the
+next, but the sizing only counts on 2/5, so where four hands leave a slot too
+narrow for the full fan it closes up toward 2/5 instead. A hand longer than its
+slot compresses its fan further instead of overflowing. When a view keeps a second row for split hands
 and the round has only one or two, the table moves down half a row so it sits
 centred (`layout_for_hands`); that is the only thing that moves when a third
 hand appears.
