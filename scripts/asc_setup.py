@@ -10,8 +10,8 @@ record, and the App Privacy label.
                 bound to the team's existing Apple Distribution certificate,
                 and write the .mobileprovision to --out
     app-info    once the app record exists: category, content rights, age
-                rating (simulated gambling, nothing else), privacy policy, support and marketing
-                URLs, a free price, and
+                rating (none of the content questions apply), privacy policy,
+                support and marketing URLs, a free price, and
                 availability in every territory except mainland China
 
 The distribution certificate is team-wide and shared by every app, so this never
@@ -41,19 +41,18 @@ PRIVACY_URL = "https://danheskett.com/app/privacy-policy/"
 SUPPORT_URL = "https://danheskett.com"
 MARKETING_URL = "https://danheskett.com/projects/openjack/"
 
-# ios/app-store-assets/LISTING.md: Games -> Card, with Casino as the second
-# games subcategory.
+# ios/app-store-assets/LISTING.md: Games -> Card, and no second subcategory.
+# The app used to list Games -> Casino second; the PATCH below clears it.
 PRIMARY_CATEGORY = "GAMES"
-SUBCATEGORIES = ("GAMES_CARD", "GAMES_CASINO")
+SUBCATEGORIES = ("GAMES_CARD",)
 
-# Age rating. The whole game is a gambling simulation (play chips, no real
-# money), so simulated gambling is answered FREQUENT_OR_INTENSE and real-money
-# gambling false. Everything else is absent: every other frequency is NONE and
-# every yes/no is false. Only attributes the declaration actually carries are
-# sent, because Apple adds questions over time and rejects unknown ones.
-AGE_FREQUENT = {"gamblingSimulated"}
+# Age rating. There is no betting or wagering of any kind: the game counts wins
+# and losses. Apple defines simulated gambling as betting or wagering without
+# real money, so it is answered NONE like every other frequency, and every
+# yes/no is false. Only attributes the declaration actually carries are sent,
+# because Apple adds questions over time and rejects unknown ones.
 AGE_NONE = {
-    "alcoholTobaccoOrDrugUseOrReferences", "contests",
+    "gamblingSimulated", "alcoholTobaccoOrDrugUseOrReferences", "contests",
     "horrorOrFearThemes", "matureOrSuggestiveThemes", "medicalOrTreatmentInformation",
     "profanityOrCrudeHumor", "sexualContentGraphicAndNudity", "sexualContentOrNudity",
     "violenceCartoonOrFantasy", "violenceRealistic",
@@ -152,8 +151,9 @@ def app_info(asc):
     iid = info["id"]
 
     rel = {"primaryCategory": {"data": {"type": "appCategories", "id": PRIMARY_CATEGORY}}}
-    for key, cat in zip(("primarySubcategoryOne", "primarySubcategoryTwo"), SUBCATEGORIES):
-        rel[key] = {"data": {"type": "appCategories", "id": cat}}
+    for i, key in enumerate(("primarySubcategoryOne", "primarySubcategoryTwo")):
+        cat = SUBCATEGORIES[i] if i < len(SUBCATEGORIES) else None
+        rel[key] = {"data": {"type": "appCategories", "id": cat} if cat else None}
     asc.call("PATCH", f"/v1/appInfos/{iid}", {"data": {
         "type": "appInfos", "id": iid, "relationships": rel}})
     print(f"category: {PRIMARY_CATEGORY} / {', '.join(SUBCATEGORIES)}")
@@ -179,15 +179,13 @@ def app_info(asc):
     if decl:
         attrs = {}
         for k in decl["attributes"]:
-            if k in AGE_FREQUENT:
-                attrs[k] = "FREQUENT_OR_INTENSE"
-            elif k in AGE_NONE:
+            if k in AGE_NONE:
                 attrs[k] = "NONE"
             elif k in AGE_FALSE:
                 attrs[k] = False
         asc.call("PATCH", f"/v1/ageRatingDeclarations/{decl['id']}", {"data": {
             "type": "ageRatingDeclarations", "id": decl["id"], "attributes": attrs}})
-        print(f"age rating: {len(attrs)} questions answered (simulated gambling: frequent)")
+        print(f"age rating: {len(attrs)} questions answered (all none)")
 
     # Free: a price schedule with the zero price point in the base territory.
     points = asc.call("GET", f"/v1/apps/{app}/appPricePoints?filter[territory]=USA&limit=200")

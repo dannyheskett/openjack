@@ -32,8 +32,8 @@ static void stack(Game* g, const int* ranks, int n) {
 
 static Game* fresh(void) { return game_create(12345, rules_default()); }
 
-static Game* fresh_rules(bool h17, bool surrender, int decks) {
-    Rules r = { .decks = decks, .h17 = h17, .surrender = surrender };
+static Game* fresh_rules(bool h17, int decks) {
+    Rules r = { .decks = decks, .h17 = h17 };
     return game_create(12345, r);
 }
 
@@ -72,107 +72,51 @@ static void test_totals(void) {
     CHECK(!game_hand_is_blackjack(&t));
 }
 
-// --- Naturals, insurance, even money ----------------------------------------
-static void test_blackjack_pays_3_to_2(void) {
+// --- Naturals ---------------------------------------------------------------
+static void test_blackjack_wins(void) {
     Game* g = fresh();
     STACK(g, 1, 5, 13, 6);                    // player A K, dealer 5 6
     CHECK(game_deal(g));
     CHECK(g->phase == PHASE_RESULT);
     CHECK(g->hands[0].result == RES_BLACKJACK);
-    CHECK(g->last_delta == 150);
-    CHECK(g->bankroll == START_BANKROLL + 150);
-    game_destroy(g);
-}
-
-static void test_blackjack_payout_is_whole_at_every_bet(void) {
-    for (int bet = MIN_BET; bet <= 500; bet += BET_STEP) {
-        Game* g = fresh();
-        g->bet = bet;
-        STACK(g, 1, 5, 13, 6);
-        game_deal(g);
-        CHECK(g->last_delta * 2 == bet * 3);  // exact 3:2, nothing rounded away
-        game_destroy(g);
-    }
-}
-
-static void test_dealer_ten_up_blackjack(void) {
-    Game* g = fresh();
-    STACK(g, 5, 10, 6, 1);                    // dealer 10 A: peeked, no insurance
-    game_deal(g);
-    CHECK(g->phase == PHASE_RESULT);
-    CHECK(g->hands[0].result == RES_LOSE);
-    CHECK(g->bankroll == START_BANKROLL - DEFAULT_BET);
     CHECK(g->hole_up);
+    CHECK(g->wins == 1 && g->losses == 0);
     game_destroy(g);
 }
 
-static void test_even_money(void) {
+static void test_dealer_blackjack(void) {
     Game* g = fresh();
-    STACK(g, 1, 1, 13, 9);                    // player A K, dealer A 9
+    STACK(g, 5, 10, 6, 1);                    // dealer 10 A: peeked
     game_deal(g);
-    CHECK(g->phase == PHASE_INSURANCE);
-    CHECK(game_offers_even_money(g));
-    game_insurance(g, true);
-    CHECK(g->hands[0].result == RES_EVEN_MONEY);
-    CHECK(g->last_delta == DEFAULT_BET);
-    game_destroy(g);
-
-    g = fresh();                              // declined, dealer has it: push
-    STACK(g, 1, 1, 13, 13);
-    game_deal(g);
-    game_insurance(g, false);
-    CHECK(g->hands[0].result == RES_PUSH);
-    CHECK(g->bankroll == START_BANKROLL);
-    game_destroy(g);
-
-    g = fresh();                              // declined, dealer does not: 3:2
-    STACK(g, 1, 1, 13, 9);
-    game_deal(g);
-    game_insurance(g, false);
-    CHECK(g->hands[0].result == RES_BLACKJACK);
-    CHECK(g->last_delta == 150);
-    game_destroy(g);
-}
-
-static void test_insurance_wins_against_blackjack(void) {
-    Game* g = fresh();
-    STACK(g, 5, 1, 6, 13);                    // player 11, dealer A K
-    game_deal(g);
-    CHECK(g->phase == PHASE_INSURANCE);
-    CHECK(!game_offers_even_money(g));
-    CHECK(game_can_insure(g));
-    game_insurance(g, true);
     CHECK(g->phase == PHASE_RESULT);
     CHECK(g->hands[0].result == RES_LOSE);
-    CHECK(g->insurance_delta == 100);         // 2:1 on 50
-    CHECK(g->last_delta == 0);                // the bet lost, insurance covered it
-    CHECK(g->bankroll == START_BANKROLL);
+    CHECK(g->hole_up);
+    CHECK(g->wins == 0 && g->losses == 1);
     game_destroy(g);
-}
 
-static void test_insurance_lost(void) {
-    Game* g = fresh();
-    STACK(g, 5, 1, 6, 7);                     // player 11, dealer A 7 (soft 18)
+    g = fresh();
+    STACK(g, 5, 1, 6, 13);                    // dealer A K: no insurance, just the peek
     game_deal(g);
-    game_insurance(g, true);
-    CHECK(g->phase == PHASE_PLAYER);
-    CHECK(g->bankroll == START_BANKROLL - 150);
-    CHECK(g->insurance_delta == -50);
-    game_stand(g);
+    CHECK(g->phase == PHASE_RESULT);
     CHECK(g->hands[0].result == RES_LOSE);
-    CHECK(g->last_delta == -150);
     game_destroy(g);
 }
 
-static void test_insurance_needs_the_chips(void) {
+static void test_ace_up_plays_on(void) {
     Game* g = fresh();
-    g->bankroll = g->shown_bankroll = 120;    // 100 bet leaves 20 < 50
-    STACK(g, 5, 1, 6, 7);
+    STACK(g, 5, 1, 6, 7);                     // dealer A 7: no blackjack
     game_deal(g);
-    CHECK(!game_can_insure(g));
-    game_insurance(g, true);                  // refused, play goes on uninsured
-    CHECK(g->insurance == 0);
     CHECK(g->phase == PHASE_PLAYER);
+    CHECK(!g->hole_up);
+    game_destroy(g);
+}
+
+static void test_both_blackjack_push(void) {
+    Game* g = fresh();
+    STACK(g, 1, 1, 13, 13);                   // player A K, dealer A K
+    game_deal(g);
+    CHECK(g->hands[0].result == RES_PUSH);
+    CHECK(g->wins == 0 && g->losses == 0);
     game_destroy(g);
 }
 
@@ -184,7 +128,7 @@ static void test_stand_and_win_after_dealer_draws(void) {
     game_stand(g);
     CHECK(g->dealer.n == 3);
     CHECK(g->hands[0].result == RES_WIN);
-    CHECK(g->bankroll == START_BANKROLL + DEFAULT_BET);
+    CHECK(g->wins == 1);
     game_destroy(g);
 }
 
@@ -194,7 +138,7 @@ static void test_dealer_bust(void) {
     game_deal(g);
     game_stand(g);
     CHECK(g->hands[0].result == RES_DEALER_BUST);
-    CHECK(g->last_delta == DEFAULT_BET);
+    CHECK(g->wins == 1 && g->losses == 0);
     game_destroy(g);
 }
 
@@ -204,7 +148,7 @@ static void test_push_after_standing(void) {
     game_deal(g);
     game_stand(g);
     CHECK(g->hands[0].result == RES_PUSH);
-    CHECK(g->bankroll == START_BANKROLL);
+    CHECK(g->wins == 0 && g->losses == 0);    // a push counts as neither
     game_destroy(g);
 }
 
@@ -217,7 +161,7 @@ static void test_player_bust_dealer_does_not_draw(void) {
     CHECK(g->phase == PHASE_RESULT);
     CHECK(g->dealer.n == 2);
     CHECK(g->hole_up);                        // the hole card still turns
-    CHECK(g->bankroll == START_BANKROLL - DEFAULT_BET);
+    CHECK(g->losses == 1);
     game_destroy(g);
 }
 
@@ -232,7 +176,7 @@ static void test_21_stands_by_itself(void) {
 }
 
 static void test_soft_17(void) {
-    Game* g = fresh_rules(false, false, 6);   // S17: stands
+    Game* g = fresh_rules(false, 6);          // S17: stands
     STACK(g, 10, 6, 8, 1, 4);
     game_deal(g);
     game_stand(g);
@@ -240,7 +184,7 @@ static void test_soft_17(void) {
     CHECK(g->hands[0].result == RES_WIN);
     game_destroy(g);
 
-    g = fresh_rules(true, false, 6);          // H17: hits the soft 17
+    g = fresh_rules(true, 6);                 // H17: hits the soft 17
     STACK(g, 10, 6, 8, 1, 4);
     game_deal(g);
     game_stand(g);
@@ -249,67 +193,37 @@ static void test_soft_17(void) {
     game_destroy(g);
 }
 
-// --- Doubling ---------------------------------------------------------------
-static void test_double(void) {
-    Game* g = fresh();
-    STACK(g, 5, 10, 6, 7, 10);                // 11 doubles into 21
-    game_deal(g);
-    CHECK(game_can_double(g));
-    game_double(g);
-    CHECK(g->hands[0].doubled && g->hands[0].wager == 200);
-    CHECK(g->hands[0].result == RES_WIN);
-    CHECK(g->bankroll == START_BANKROLL + 200);
-    game_destroy(g);
-
-    g = fresh();
-    STACK(g, 10, 10, 6, 7, 10);               // 16 doubles into 26
-    game_deal(g);
-    game_double(g);
-    CHECK(g->hands[0].result == RES_BUST);
-    CHECK(g->bankroll == START_BANKROLL - 200);
-    game_destroy(g);
-}
-
-static void test_double_refused(void) {
-    Game* g = fresh();
-    STACK(g, 2, 10, 3, 7, 2);
-    game_deal(g);
-    game_hit(g);                              // three cards
-    CHECK(!game_can_double(g));
-    int before = g->bankroll;
-    game_double(g);
-    CHECK(g->bankroll == before && g->hands[0].n == 3);
-    game_destroy(g);
-
-    g = fresh();
-    g->bankroll = g->shown_bankroll = 150;    // 100 bet leaves 50 < 100
-    STACK(g, 5, 10, 6, 7);
-    game_deal(g);
-    CHECK(!game_can_double(g));
-    game_destroy(g);
-}
-
 // --- Splitting --------------------------------------------------------------
-static void test_split_and_double_after(void) {
+static void test_split(void) {
     Game* g = fresh();
-    STACK(g, 8, 10, 8, 7, 3, 10, 10);         // 8 8 against 10 7
+    STACK(g, 8, 10, 8, 7, 3, 10, 10, 1);      // 8 8 against 10 7
     game_deal(g);
     CHECK(game_can_split(g));
     game_split(g);
     CHECK(g->nhands == 2);
     CHECK(g->hands[0].n == 2 && g->hands[1].n == 1);   // second hand waits
-    CHECK(g->bankroll == START_BANKROLL - 200);
-    CHECK(game_can_double(g));                // double after split
-    game_double(g);                           // 8 3 10 = 21
+    game_hit(g);                              // 8 3 10 = 21, stands by itself
     CHECK(g->hands[0].result == RES_NONE);    // not settled until the dealer plays
     CHECK(g->active == 1);
     CHECK(g->hands[1].n == 2);                // dealt its second card on arrival
-    game_stand(g);                            // 8 10 = 18
+    game_stand(g);                            // 8 1 = 19
     CHECK(g->phase == PHASE_RESULT);
-    CHECK(g->hands[0].result == RES_WIN && g->hands[0].delta == 200);
-    CHECK(g->hands[1].result == RES_WIN && g->hands[1].delta == 100);
-    CHECK(g->last_delta == 300);
-    CHECK(g->bankroll == START_BANKROLL + 300);
+    CHECK(g->hands[0].result == RES_WIN);
+    CHECK(g->hands[1].result == RES_WIN);
+    CHECK(g->round_wins == 2 && g->round_losses == 0);
+    CHECK(g->wins == 2);                      // each split hand counts
+    game_destroy(g);
+}
+
+static void test_split_mixed_result(void) {
+    Game* g = fresh();
+    STACK(g, 8, 10, 8, 9, 10, 5);             // 8 8 against 10 9
+    game_deal(g);
+    game_split(g);
+    game_stand(g);                            // 8 10 = 18 loses to 19
+    game_stand(g);                            // 8 5 = 13 loses to 19
+    CHECK(g->round_wins == 0 && g->round_losses == 2);
+    CHECK(g->losses == 2);
     game_destroy(g);
 }
 
@@ -336,10 +250,9 @@ static void test_split_aces(void) {
     CHECK(g->hands[0].n == 2 && g->hands[1].n == 2);   // one card each
     CHECK(g->phase == PHASE_RESULT);          // nothing left to play
     CHECK(!game_hand_is_blackjack(&g->hands[0]));
-    CHECK(g->hands[0].result == RES_WIN);     // A K is 21, paid 1:1
-    CHECK(g->hands[0].delta == DEFAULT_BET);
+    CHECK(g->hands[0].result == RES_WIN);     // A K is 21, a plain win
     CHECK(g->hands[1].result == RES_WIN);     // A 9 = 20 beats 17
-    CHECK(g->bankroll == START_BANKROLL + 200);
+    CHECK(g->wins == 2);
     game_destroy(g);
 }
 
@@ -353,99 +266,38 @@ static void test_split_limit(void) {
     CHECK(g->nhands == MAX_HANDS);
     CHECK(g->hands[0].cards[0].rank == 8 && g->hands[0].cards[1].rank == 8);
     CHECK(!game_can_split(g));                // a pair, but four hands already
-    CHECK(g->bankroll == START_BANKROLL - 4 * DEFAULT_BET);
     game_destroy(g);
 }
 
-// --- Surrender --------------------------------------------------------------
-static void test_surrender(void) {
+// --- Wins and losses --------------------------------------------------------
+static void test_tally_across_rounds(void) {
     Game* g = fresh();
-    STACK(g, 10, 10, 6, 7);
-    game_deal(g);
-    CHECK(!game_can_surrender(g));            // off unless Options turn it on
-    game_destroy(g);
-
-    g = fresh_rules(false, true, 6);
-    STACK(g, 10, 10, 6, 7);
-    game_deal(g);
-    CHECK(game_can_surrender(g));
-    game_surrender(g);
-    CHECK(g->phase == PHASE_RESULT);
-    CHECK(g->hands[0].result == RES_SURRENDER);
-    CHECK(g->last_delta == -DEFAULT_BET / 2);
-    CHECK(g->dealer.n == 2);
-    game_destroy(g);
-
-    g = fresh_rules(false, true, 6);          // not after a split
-    STACK(g, 8, 10, 8, 7, 3);
-    game_deal(g);
-    game_split(g);
-    CHECK(!game_can_surrender(g));
-    game_destroy(g);
-}
-
-// --- Betting and the bankroll -----------------------------------------------
-static void test_bet_limits(void) {
-    Game* g = fresh();
-    game_bet_change(g, -10);
-    CHECK(g->bet == MIN_BET);
-    game_bet_change(g, 1);
-    CHECK(g->bet == MIN_BET + BET_STEP);
-    g->bankroll = 175;
-    game_bet_change(g, 100);
-    CHECK(g->bet == 150);                     // the most 175 covers, in steps
-    CHECK(g->bet % BET_STEP == 0);
-    game_destroy(g);
-}
-
-static void test_bet_clamped_after_a_loss(void) {
-    Game* g = fresh();
-    g->bet = 500;
-    g->bankroll = g->shown_bankroll = 600;
-    STACK(g, 10, 10, 6, 10);                  // 16 against 20
+    STACK(g, 10, 6, 9, 10, 2);                // win
     game_deal(g);
     game_stand(g);
-    game_next(g);
-    CHECK(g->bankroll == 100);
-    CHECK(g->bet == 100);
-    game_destroy(g);
-}
-
-static void test_refill_is_reported(void) {
-    Game* g = fresh();
-    g->bet = 50;
-    g->bankroll = g->shown_bankroll = 60;
-    STACK(g, 10, 10, 6, 10);
+    STACK(g, 10, 10, 6, 10);                  // 16 against 20: loss
+    CHECK(game_deal(g));                      // straight from the result
+    game_stand(g);
+    STACK(g, 10, 10, 8, 8);                   // push
     game_deal(g);
     game_stand(g);
-    CHECK(g->bankroll == 10);
-    game_next(g);
-    CHECK(g->bankroll == START_BANKROLL);
-    CHECK(g->refilled);
-    game_step_begin(g);
-    game_update(g);
-    CHECK(g->refilled);                       // stays until main shows it
+    CHECK(g->wins == 1 && g->losses == 1);
+    CHECK(g->hands_played == 3);
     game_destroy(g);
 }
 
 // --- Phases -----------------------------------------------------------------
 static void test_actions_out_of_phase(void) {
     Game* g = fresh();
-    game_hit(g); game_stand(g); game_double(g); game_split(g);
-    game_surrender(g); game_insurance(g, true); game_next(g);
-    CHECK(g->phase == PHASE_BET);
-    CHECK(g->nhands == 0 && g->bankroll == START_BANKROLL);
+    CHECK(g->phase == PHASE_READY);
+    game_hit(g); game_stand(g); game_split(g);
+    CHECK(g->phase == PHASE_READY);
+    CHECK(g->nhands == 0 && g->wins == 0 && g->losses == 0);
 
     STACK(g, 10, 6, 9, 10, 2);
     CHECK(game_deal(g));
     CHECK(g->phase == PHASE_PLAYER);
-    CHECK(!game_deal(g));
-    int bet = g->bet;
-    game_bet_change(g, 1);
-    CHECK(g->bet == bet);
-    game_insurance(g, true);
-    CHECK(g->insurance == 0);
-    game_next(g);
+    CHECK(!game_deal(g));                     // no new deal mid-hand
     CHECK(g->phase == PHASE_PLAYER);
     game_destroy(g);
 }
@@ -453,12 +305,12 @@ static void test_actions_out_of_phase(void) {
 static void test_rules_apply_at_next_deal(void) {
     Game* g = fresh();
     CHECK(g->shoe_decks == 6 && g->shoe_n == 312);
-    Rules r = { .decks = 1, .h17 = true, .surrender = true };
+    Rules r = { .decks = 1, .h17 = true };
     game_set_rules(g, r);
     CHECK(g->shoe_decks == 6 && !g->rules.h17);
     game_deal(g);
     CHECK(g->shoe_decks == 1 && g->shoe_n == 52);
-    CHECK(g->rules.h17 && g->rules.surrender);
+    CHECK(g->rules.h17);
     game_destroy(g);
 }
 
@@ -508,13 +360,13 @@ static void test_outcome_waits_for_the_cards(void) {
     Game* g = fresh();
     STACK(g, 1, 5, 13, 6);                    // a natural, settled at the deal
     game_deal(g);
-    CHECK(g->bankroll == START_BANKROLL + 150);
-    CHECK(g->shown_bankroll == START_BANKROLL - DEFAULT_BET);
+    CHECK(g->wins == 1);
+    CHECK(g->shown_wins == 0);                // not until the cards have landed
     CHECK(!(g->events & EV_BLACKJACK));
     unsigned ev = drain(g);
     CHECK(ev & EV_BLACKJACK);
     CHECK(g->settled_shown);
-    CHECK(g->shown_bankroll == g->bankroll);
+    CHECK(g->shown_wins == 1 && g->shown_losses == 0);
     game_destroy(g);
 }
 
@@ -527,7 +379,7 @@ static int count_of(const Card* cards, int n, Card c) {
 
 static void test_shoe_contents(void) {
     for (int decks = 1; decks <= 6; decks += 5) {
-        Game* g = fresh_rules(false, false, decks);
+        Game* g = fresh_rules(false, decks);
         CHECK(g->shoe_n == 52 * decks);
         for (int s = 0; s < 4; s++)
             for (int r = 1; r <= 13; r++)
@@ -537,13 +389,13 @@ static void test_shoe_contents(void) {
 }
 
 static void test_reshuffle_threshold(void) {
-    Game* g = fresh_rules(false, false, 1);
+    Game* g = fresh_rules(false, 1);
     g->draw = 38;                             // 14 left: the cut is at 39
     game_deal(g);
     CHECK(g->draw == 42);
     game_destroy(g);
 
-    g = fresh_rules(false, false, 1);
+    g = fresh_rules(false, 1);
     g->draw = 39;                             // 13 left: reshuffle first
     game_deal(g);
     CHECK(g->draw == 4);
@@ -564,36 +416,30 @@ static bool table_is_legal(const Game* g) {
 }
 
 static void play_basic(Game* g) {
-    if (g->phase == PHASE_INSURANCE) game_insurance(g, false);
     while (g->phase == PHASE_PLAYER) {
         const Hand* h = &g->hands[g->active];
         int t = hand_total(h->cards, h->n, NULL);
-        if (game_can_split(g))                   game_split(g);
-        else if (t == 11 && game_can_double(g))  game_double(g);
-        else if (t < 17)                         game_hit(g);
-        else                                     game_stand(g);
+        if (game_can_split(g)) game_split(g);
+        else if (t < 17)       game_hit(g);
+        else                   game_stand(g);
     }
 }
 
 static void test_no_duplicate_cards(void) {
     for (int decks = 1; decks <= 6; decks += 5) {
-        Game* g = fresh_rules(false, false, decks);
+        Game* g = fresh_rules(false, decks);
         for (int round = 0; round < 3000; round++) {
-            g->bankroll = START_BANKROLL;         // never run out mid-test
             game_deal(g);
             play_basic(g);
             CHECK(table_is_legal(g));
-            game_next(g);
         }
         game_destroy(g);
     }
 
     // Force the shoe dry in the middle of a hand.
-    Game* g = fresh_rules(false, false, 1);
+    Game* g = fresh_rules(false, 1);
     for (int round = 0; round < 500; round++) {
-        g->bankroll = START_BANKROLL;
         game_deal(g);
-        if (g->phase == PHASE_INSURANCE) game_insurance(g, false);
         if (g->phase == PHASE_PLAYER) {
             g->draw = g->shoe_n;                  // nothing left
             game_hit(g);                          // so this card rebuilds the shoe
@@ -601,11 +447,9 @@ static void test_no_duplicate_cards(void) {
             play_basic(g);
         }
         CHECK(table_is_legal(g));
-        game_next(g);
         game_deal(g);                             // a full shoe again
         CHECK(!g->short_shoe && g->shoe_n == 52);
         play_basic(g);
-        game_next(g);
     }
     game_destroy(g);
 }
@@ -658,31 +502,24 @@ static void test_sim_clock(void) {
 }
 
 int main(void) {
-    printf("test_game: rules, payouts, split, insurance, shoe, queue, clock\n");
+    printf("test_game: rules, wins and losses, split, shoe, queue, clock\n");
     test_totals();
-    test_blackjack_pays_3_to_2();
-    test_blackjack_payout_is_whole_at_every_bet();
-    test_dealer_ten_up_blackjack();
-    test_even_money();
-    test_insurance_wins_against_blackjack();
-    test_insurance_lost();
-    test_insurance_needs_the_chips();
+    test_blackjack_wins();
+    test_dealer_blackjack();
+    test_ace_up_plays_on();
+    test_both_blackjack_push();
     test_stand_and_win_after_dealer_draws();
     test_dealer_bust();
     test_push_after_standing();
     test_player_bust_dealer_does_not_draw();
     test_21_stands_by_itself();
     test_soft_17();
-    test_double();
-    test_double_refused();
-    test_split_and_double_after();
+    test_split();
+    test_split_mixed_result();
     test_split_ten_values();
     test_split_aces();
     test_split_limit();
-    test_surrender();
-    test_bet_limits();
-    test_bet_clamped_after_a_loss();
-    test_refill_is_reported();
+    test_tally_across_rounds();
     test_actions_out_of_phase();
     test_rules_apply_at_next_deal();
     test_hole_card_hidden();

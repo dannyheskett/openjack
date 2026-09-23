@@ -76,7 +76,6 @@ void sound_init(void) {
 
     effects[SFX_DEAL]        = make_tone(380.0f, 0.05f, 0.5f, 0.16f);
     effects[SFX_FLIP]        = make_tone(520.0f, 0.04f, 0.35f, 0.16f);
-    effects[SFX_CHIP]        = make_tone(660.0f, 0.03f, 0.5f, 0.16f);
     effects[SFX_WIN]         = make_arp(win_arp, 3, 0.06f, 0.5f, 0.26f);
     effects[SFX_LOSE]        = make_arp(lose_arp, 3, 0.10f, 0.5f, 0.24f);
     effects[SFX_PUSH]        = make_arp(push_arp, 2, 0.05f, 0.5f, 0.18f);

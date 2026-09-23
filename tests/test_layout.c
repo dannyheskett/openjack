@@ -56,16 +56,13 @@ static bool inside(Box a, int view_w, int view_h) {
 
 // A game in each phase, with every button the phase can show enabled.
 static Game* game_in(GamePhase phase) {
-    Rules r = rules_default();
-    r.surrender = true;
-    Game* g = game_create(7, r);
+    Game* g = game_create(7, rules_default());
     g->phase = phase;
-    if (phase != PHASE_BET) {
+    if (phase != PHASE_READY) {
         g->nhands = 1;
         g->hands[0].cards[0] = (Card){ 8, 0 };
         g->hands[0].cards[1] = (Card){ 8, 1 };
         g->hands[0].n = g->hands[0].vis = 2;
-        g->hands[0].wager = DEFAULT_BET;
         g->dealer.cards[0] = (Card){ 1, 2 };
         g->dealer.cards[1] = (Card){ 9, 3 };
         g->dealer.n = g->dealer.vis = 2;
@@ -137,8 +134,8 @@ static void check_table(const char* name, int w, int h) {
 
     // Buttons, in every phase: inside the view, clear of the cards, and each
     // one's centre hits it.
-    GamePhase phases[4] = { PHASE_BET, PHASE_INSURANCE, PHASE_PLAYER, PHASE_RESULT };
-    for (int p = 0; p < 4; p++) {
+    GamePhase phases[3] = { PHASE_READY, PHASE_PLAYER, PHASE_RESULT };
+    for (int p = 0; p < 3; p++) {
         Game* g = game_in(phases[p]);
         Btn b[MAX_BUTTONS];
         int nb = layout_buttons(&l, g, b);
@@ -201,28 +198,25 @@ static void test_buttons_follow_the_game(void) {
     Btn b[MAX_BUTTONS];
 
     Game* g = game_in(PHASE_PLAYER);
-    CHECK(layout_buttons(&l, g, b) == 5);         // with surrender
-    g->rules.surrender = false;
-    CHECK(layout_buttons(&l, g, b) == 4);
+    CHECK(layout_buttons(&l, g, b) == 3);
+    CHECK(b[0].id == BTN_HIT && b[1].id == BTN_STAND);
+    CHECK(b[2].id == BTN_SPLIT && b[2].on);       // 8 8
     g->hands[0].cards[1] = (Card){ 9, 1 };        // 8 9: no split
     layout_buttons(&l, g, b);
-    CHECK(b[3].id == BTN_SPLIT && !b[3].on);
-    CHECK(layout_button_at(&l, g, b[3].x + 1, b[3].y + 1) == BTN_NONE);   // disabled
+    CHECK(b[2].id == BTN_SPLIT && !b[2].on);
+    CHECK(layout_button_at(&l, g, b[2].x + 1, b[2].y + 1) == BTN_NONE);   // disabled
 
     g->q_len = 1;                                 // a card still landing
     CHECK(layout_buttons(&l, g, b) == 0);
     g->q_len = 0;
     game_destroy(g);
 
-    g = game_in(PHASE_BET);
-    g->bet = MIN_BET;
-    layout_buttons(&l, g, b);
-    CHECK(b[0].id == BTN_BET_DOWN && !b[0].on);   // already at the minimum
-    CHECK(b[1].id == BTN_DEAL && b[1].on);
+    g = game_in(PHASE_READY);
+    CHECK(layout_buttons(&l, g, b) == 1 && b[0].id == BTN_DEAL && b[0].on);
     game_destroy(g);
 
     g = game_in(PHASE_RESULT);
-    CHECK(layout_buttons(&l, g, b) == 1 && b[0].id == BTN_NEXT);
+    CHECK(layout_buttons(&l, g, b) == 1 && b[0].id == BTN_DEAL && b[0].on);
     game_destroy(g);
 }
 

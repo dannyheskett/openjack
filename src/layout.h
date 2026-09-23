@@ -6,8 +6,8 @@
 // simply fits the same table to the new shape) and makes the whole thing
 // unit-testable without a window (tests/test_layout.c).
 //
-// The table, top to bottom: the wordmark bar, the status line (bankroll and
-// bet), the dealer's hand under its total, a message band, the player's hands
+// The table, top to bottom: the wordmark bar, the status line (wins and
+// losses), the dealer's hand under its total, a message band, the player's hands
 // with their totals under them, and the action buttons. Cards are one size for
 // the whole view, whatever is dealt, so nothing on the table jumps when a hand
 // is split.
@@ -29,18 +29,11 @@ typedef enum {
     BTN_NONE = 0,
     BTN_HIT,
     BTN_STAND,
-    BTN_DOUBLE,
     BTN_SPLIT,
-    BTN_SURRENDER,
-    BTN_INSURE,      // "Insurance", or "Even Money" against a natural
-    BTN_DECLINE,
-    BTN_BET_DOWN,
-    BTN_DEAL,
-    BTN_BET_UP,
-    BTN_NEXT,
+    BTN_DEAL,        // "Deal", or "Next Hand" once a round is over
 } Button;
 
-#define MAX_BUTTONS 5
+#define MAX_BUTTONS 3
 
 typedef struct {
     Button id;
@@ -53,7 +46,7 @@ typedef struct {
 
     int margin, gap;
     int titlebar_h, title_fs;          // wordmark bar, grown to clear a cutout
-    int status_y, status_h, status_fs; // bankroll / bet line
+    int status_y, status_h, status_fs; // wins / losses line
 
     int table_x, table_w;              // horizontal extent of the hands
     int card_w, card_h;
@@ -69,7 +62,6 @@ typedef struct {
     bool side_buttons;                 // column on the right instead of a band
     int btn_fs, btn_h;
     int btn_x, btn_y, btn_w, btn_area_h; // the button area
-    int btn_rows;                      // bottom band: rows reserved (1 or 2)
 
     int shoe_x, shoe_y;                // where dealt cards come from
 } Layout;

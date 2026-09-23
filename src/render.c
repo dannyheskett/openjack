@@ -1,5 +1,4 @@
-// The whole renderer: chrome, the table, the cards, the buttons, the menu and
-// the notice panel. There is no second layout to dispatch to -- layout.c fits
+// The whole renderer: chrome, the table, the cards, the buttons and the menu. There is no second layout to dispatch to -- layout.c fits
 // the table to any window, so this file serves desktop, both phone
 // orientations and an iPad, re-deriving everything from the live view size
 // every frame. Every pixel goes through the gfx primitive layer (gfx.h), so the
@@ -250,18 +249,18 @@ static void format_total(char* buf, int cap, int total, bool soft, bool natural,
 static const char* result_word(Result r) {
     switch (r) {
     case RES_BLACKJACK:   return "Blackjack";
-    case RES_EVEN_MONEY:  return "Even money";
     case RES_WIN:         return "Win";
     case RES_DEALER_BUST: return "Win";
     case RES_PUSH:        return "Push";
     case RES_LOSE:        return "Lose";
     case RES_BUST:        return "Bust";
-    case RES_SURRENDER:   return "Surrender";
     default:              return "";
     }
 }
 
-static Color delta_color(int d) { return (d > 0) ? WIN_COL : (d < 0) ? LOSE_COL : TEXT_LIGHT; }
+static Color result_color(Result r) {
+    return result_is_win(r) ? WIN_COL : result_is_loss(r) ? LOSE_COL : TEXT_LIGHT;
+}
 
 // --------------------------------------------------------------------------
 // Chrome
@@ -290,14 +289,6 @@ static void draw_title_bar(const Layout* l) {
     gfx_text(title, cx, ty, fs, TEXT_LIGHT);
 }
 
-// Chips at risk this round: every hand's wager plus any insurance.
-static int at_risk(const Game* g) {
-    if (g->phase == PHASE_BET) return g->bet;
-    int sum = g->insurance;
-    for (int i = 0; i < g->nhands; i++) sum += g->hands[i].wager;
-    return sum;
-}
-
 static void draw_status(const Game* g, const Layout* l) {
     char buf[48];
     int fs = l->status_fs;
@@ -306,11 +297,11 @@ static void draw_status(const Game* g, const Layout* l) {
     int left = l->margin + sa.left;
     int right = l->view_w - l->margin - sa.right;
 
-    snprintf(buf, sizeof buf, "Bankroll %d", g->shown_bankroll);
+    snprintf(buf, sizeof buf, "Wins %d", g->shown_wins);
     gfx_text(buf, left, y, fs, TEXT_LIGHT);
 
-    snprintf(buf, sizeof buf, "Bet %d", at_risk(g));
-    gfx_text(buf, right - gfx_measure_text(buf, fs), y, fs, TEXT_DIM);
+    snprintf(buf, sizeof buf, "Losses %d", g->shown_losses);
+    gfx_text(buf, right - gfx_measure_text(buf, fs), y, fs, TEXT_LIGHT);
 }
 
 // --------------------------------------------------------------------------
@@ -365,9 +356,7 @@ static void draw_hands(const Game* g, const Layout* l) {
         Color c = active ? HILITE : TEXT_LIGHT;
         if (round_over(g) && g->nhands > 1) {
             snprintf(buf, sizeof buf, "%s  %s", tot, result_word(hand->result));
-            c = delta_color(hand->delta);
-        } else if (hand->doubled) {
-            snprintf(buf, sizeof buf, "%s  x2", tot);
+            c = result_color(hand->result);
         } else {
             snprintf(buf, sizeof buf, "%s", tot);
         }
@@ -388,48 +377,38 @@ static void draw_message(const Game* g, const Layout* l) {
     Color c = TEXT_DIM;
     buf[0] = 0;
 
-    if (g->phase == PHASE_BET) {
-        snprintf(buf, sizeof buf, "Place your bet");
-    } else if (g->phase == PHASE_INSURANCE && !game_busy(g)) {
-        snprintf(buf, sizeof buf, game_offers_even_money(g) ? "Even money?" : "Insurance?");
-        c = HILITE;
+    if (g->phase == PHASE_READY) {
+        snprintf(buf, sizeof buf, "Deal to start");
     } else if (g->phase == PHASE_PLAYER && g->nhands > 1) {
         snprintf(buf, sizeof buf, "Hand %d of %d", g->active + 1, g->nhands);
     } else if (round_over(g)) {
-        int d = g->last_delta;
-        c = delta_color(d);
+        int w = g->round_wins, lo = g->round_losses;
+        c = (w > lo) ? WIN_COL : (w < lo) ? LOSE_COL : TEXT_LIGHT;
         const Hand* h = &g->hands[0];
         bool dealer_bj = game_hand_is_blackjack(&g->dealer);
-        char head[48];
         if (g->nhands > 1) {
-            snprintf(head, sizeof head, (d > 0) ? "You win %+d" : (d < 0) ? "You lose %+d" : "Even", d);
+            snprintf(buf, sizeof buf, "Won %d, lost %d", w, lo);
         } else {
-            int hd = h->delta;
             switch (h->result) {
-            case RES_BLACKJACK:   snprintf(head, sizeof head, "Blackjack! %+d", hd); break;
-            case RES_EVEN_MONEY:  snprintf(head, sizeof head, "Even money %+d", hd); break;
-            case RES_WIN:         snprintf(head, sizeof head, "You win %+d", hd); break;
-            case RES_DEALER_BUST: snprintf(head, sizeof head, "Dealer busts %+d", hd); break;
-            case RES_PUSH:        snprintf(head, sizeof head, "Push"); break;
-            case RES_BUST:        snprintf(head, sizeof head, "Bust %+d", hd); break;
-            case RES_SURRENDER:   snprintf(head, sizeof head, "Surrendered %+d", hd); break;
-            default:              snprintf(head, sizeof head, dealer_bj ? "Dealer blackjack %+d"
-                                                                        : "Dealer wins %+d", hd); break;
+            case RES_BLACKJACK:   snprintf(buf, sizeof buf, "Blackjack!"); break;
+            case RES_WIN:         snprintf(buf, sizeof buf, "You win"); break;
+            case RES_DEALER_BUST: snprintf(buf, sizeof buf, "Dealer busts"); break;
+            case RES_PUSH:        snprintf(buf, sizeof buf, "Push"); break;
+            case RES_BUST:        snprintf(buf, sizeof buf, "Bust"); break;
+            default:              snprintf(buf, sizeof buf, dealer_bj ? "Dealer blackjack"
+                                                                      : "Dealer wins"); break;
             }
         }
-        if (g->insurance > 0)
-            snprintf(buf, sizeof buf, "%s  Insurance %+d", head, g->insurance_delta);
-        else
-            snprintf(buf, sizeof buf, "%s", head);
     }
     if (buf[0])
         text_centered(buf, l->table_x + l->table_w / 2, l->msg_y + (l->msg_h - l->msg_fs) / 2,
                       l->msg_fs, l->table_w, c);
 
 #ifdef OJ_TOUCH
-    // The menu gesture is not discoverable on its own, so the first hands say
-    // where it is, in the empty row where the player's cards will land.
-    if (s_menu_hint && g->phase == PHASE_BET && g->hands_played < 3)
+    // The menu gesture is not discoverable on its own, so before the first
+    // hand the table says where it is, in the empty row where the player's
+    // cards will land.
+    if (s_menu_hint && g->phase == PHASE_READY)
         text_centered("Tap the title bar or two-finger tap for the menu",
                       l->table_x + l->table_w / 2, l->player_y + (l->card_h - l->label_fs) / 2,
                       l->label_fs, l->table_w, TEXT_DIM);
@@ -438,18 +417,11 @@ static void draw_message(const Game* g, const Layout* l) {
 
 static const char* button_label(const Game* g, Button id) {
     switch (id) {
-    case BTN_HIT:       return "Hit";
-    case BTN_STAND:     return "Stand";
-    case BTN_DOUBLE:    return "Double";
-    case BTN_SPLIT:     return "Split";
-    case BTN_SURRENDER: return "Surrender";
-    case BTN_INSURE:    return game_offers_even_money(g) ? "Even Money" : "Insurance";
-    case BTN_DECLINE:   return "No Thanks";
-    case BTN_BET_DOWN:  return "-";
-    case BTN_DEAL:      return "Deal";
-    case BTN_BET_UP:    return "+";
-    case BTN_NEXT:      return "Next Hand";
-    default:            return "";
+    case BTN_HIT:   return "Hit";
+    case BTN_STAND: return "Stand";
+    case BTN_SPLIT: return "Split";
+    case BTN_DEAL:  return (g->phase == PHASE_RESULT) ? "Next Hand" : "Deal";
+    default:        return "";
     }
 }
 
@@ -467,7 +439,7 @@ static void draw_buttons(const Game* g, const Layout* l) {
 }
 
 // --------------------------------------------------------------------------
-// Menu + notice panel (menu.c, the same in every game in this family)
+// Menu (menu.c, the same in every game in this family)
 // --------------------------------------------------------------------------
 static MenuTheme menu_theme(void) {
     MenuTheme t = { .background = FELT, .panel = MENU_BG, .edge = TEXT_DIM,
@@ -478,14 +450,8 @@ static MenuTheme menu_theme(void) {
 // --------------------------------------------------------------------------
 // Scenes
 // --------------------------------------------------------------------------
-typedef struct {
-    const Game* g;
-    const char* panel_title;
-} TableCtx;
-
 static void draw_table_scene(void* vctx, int view_w, int view_h) {
-    TableCtx* ctx = (TableCtx*)vctx;
-    const Game* g = ctx->g;
+    const Game* g = (const Game*)vctx;
     Layout l = layout_for_hands(view_w, view_h, g->nhands);
 
     gfx_clear(FELT);
@@ -494,30 +460,14 @@ static void draw_table_scene(void* vctx, int view_w, int view_h) {
     draw_dealer(g, &l);
     draw_message(g, &l);
     draw_hands(g, &l);
-    if (!ctx->panel_title) draw_buttons(g, &l);
-
-    if (ctx->panel_title) {
-        MenuTheme t = menu_theme();
-#ifdef OJ_TOUCH
-        const char* sub = "Tap to continue";
-#else
-        const char* sub = "Press any key";
-#endif
-        menu_draw_notice(&t, view_w, view_h, ctx->panel_title, sub);
-    }
+    draw_buttons(g, &l);
 }
 
 // --------------------------------------------------------------------------
 // Public entry points
 // --------------------------------------------------------------------------
 void render_frame(const Game* g) {
-    TableCtx ctx = { g, NULL };
-    present(draw_table_scene, &ctx);
-}
-
-void render_notice(const Game* g, const char* title) {
-    TableCtx ctx = { g, title };
-    present(draw_table_scene, &ctx);
+    present(draw_table_scene, (void*)g);
 }
 
 void render_menu(const char* title, const char* const* labels, int count,

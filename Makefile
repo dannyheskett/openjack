@@ -491,8 +491,8 @@ $(IOS_IPA): $(IOS_DEPS)
 # ---------------------------------------------------------------------------
 # Unit tests (no raylib/window needed). Each test TU includes the sources under
 # test directly to reach their file-static helpers and state.
-#   test_game   — game.c + tick.c (the rules and payouts, split, insurance,
-#                 surrender, the shoe, the deal queue, and the fixed-timestep
+#   test_game   — game.c + tick.c (the rules, wins and losses, split, the
+#                 shoe, the deal queue, and the fixed-timestep
 #                 clock that paces it at 60 Hz on any display)
 #   test_layout — layout.c: readable cards and no overlaps on every device
 #                 shape in both orientations, chrome that keeps its size on

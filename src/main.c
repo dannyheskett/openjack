@@ -17,7 +17,7 @@
 #include <emscripten/emscripten.h>
 #endif
 
-typedef enum { STATE_MENU, STATE_OPTIONS, STATE_PLAYING, STATE_NOTICE } AppState;
+typedef enum { STATE_MENU, STATE_OPTIONS, STATE_PLAYING } AppState;
 
 typedef enum {
     ACT_RESUME, ACT_NEW, ACT_OPTIONS, ACT_SOUND, ACT_RECORD, ACT_EXIT,
@@ -33,7 +33,6 @@ static void play_event_sounds(unsigned ev) {
     if (ev & EV_BUST) sound_play(SFX_BUST);
     if (ev & EV_FLIP) sound_play(SFX_FLIP);
     if (ev & EV_DEAL) sound_play(SFX_DEAL);
-    if (ev & EV_CHIP) sound_play(SFX_CHIP);
 }
 
 // Fill labels[]/actions[] with the current menu. Returns the item count and
@@ -66,21 +65,19 @@ static int build_menu(bool resumable, const char** labels, MenuAction* actions,
 
 // The Options screen: the house rules, plus Back. A change applies from the
 // next hand, never to one already dealt.
-#define OPT_ITEMS 4
-enum { OPT_DECKS, OPT_SOFT17, OPT_SURRENDER, OPT_BACK };
+#define OPT_ITEMS 3
+enum { OPT_DECKS, OPT_SOFT17, OPT_BACK };
 
 static int build_options(Rules r, const char** labels) {
-    labels[OPT_DECKS]     = (r.decks == 1) ? "Decks: 1" : "Decks: 6";
-    labels[OPT_SOFT17]    = r.h17 ? "Soft 17: Dealer Hits" : "Soft 17: Dealer Stands";
-    labels[OPT_SURRENDER] = r.surrender ? "Surrender: On" : "Surrender: Off";
-    labels[OPT_BACK]      = "Back";
+    labels[OPT_DECKS]  = (r.decks == 1) ? "Decks: 1" : "Decks: 6";
+    labels[OPT_SOFT17] = r.h17 ? "Soft 17: Dealer Hits" : "Soft 17: Dealer Stands";
+    labels[OPT_BACK]   = "Back";
     return OPT_ITEMS;
 }
 
 static void cycle_option(Rules* r, int item) {
-    if (item == OPT_DECKS)     r->decks = (r->decks == 1) ? MAX_DECKS : 1;
-    if (item == OPT_SOFT17)    r->h17 = !r->h17;
-    if (item == OPT_SURRENDER) r->surrender = !r->surrender;
+    if (item == OPT_DECKS)  r->decks = (r->decks == 1) ? MAX_DECKS : 1;
+    if (item == OPT_SOFT17) r->h17 = !r->h17;
 }
 
 // App state carried across frames. Kept in one struct so the web and iOS builds
@@ -130,17 +127,10 @@ static bool menu_pointer(const Input* in, Vector2* p) {
 
 static void apply(Game* g, Button b) {
     switch (b) {
-    case BTN_HIT:       game_hit(g); break;
-    case BTN_STAND:     game_stand(g); break;
-    case BTN_DOUBLE:    game_double(g); break;
-    case BTN_SPLIT:     game_split(g); break;
-    case BTN_SURRENDER: game_surrender(g); break;
-    case BTN_INSURE:    game_insurance(g, true); break;
-    case BTN_DECLINE:   game_insurance(g, false); break;
-    case BTN_BET_DOWN:  game_bet_change(g, -1); break;
-    case BTN_BET_UP:    game_bet_change(g, +1); break;
-    case BTN_DEAL:      game_deal(g); break;
-    case BTN_NEXT:      game_next(g); break;
+    case BTN_HIT:   game_hit(g); break;
+    case BTN_STAND: game_stand(g); break;
+    case BTN_SPLIT: game_split(g); break;
+    case BTN_DEAL:  game_deal(g); break;
     default: break;
     }
 }
@@ -149,24 +139,14 @@ static void apply(Game* g, Button b) {
 // frame, whether it comes from here or from a button.
 static Button key_action(const Game* g, const Input* in) {
     switch (g->phase) {
-    case PHASE_BET:
+    case PHASE_READY:
+    case PHASE_RESULT:
         if (in->select_pressed) return BTN_DEAL;
-        if (in->bet_up)         return BTN_BET_UP;
-        if (in->bet_down)       return BTN_BET_DOWN;
-        break;
-    case PHASE_INSURANCE:
-        if (in->key_insure)     return BTN_INSURE;
-        if (in->key_decline)    return BTN_DECLINE;
         break;
     case PHASE_PLAYER:
         if (in->key_hit)        return BTN_HIT;
         if (in->key_stand)      return BTN_STAND;
-        if (in->key_double)     return BTN_DOUBLE;
         if (in->key_split)      return BTN_SPLIT;
-        if (in->key_surrender)  return BTN_SURRENDER;
-        break;
-    case PHASE_RESULT:
-        if (in->select_pressed) return BTN_NEXT;
         break;
     }
     return BTN_NONE;
@@ -296,17 +276,11 @@ static void frame_step(void* arg) {
             }
             if (act == BTN_NONE) act = key_action(g, &in);
             apply(g, act);
-            if (g->refilled) { g->refilled = false; c->state = STATE_NOTICE; }
         }
 
         play_event_sounds(g->events);
         break;
     }
-
-    case STATE_NOTICE:
-        if (in.escape_pressed || (in.any_pressed && !in.fullscreen_toggle))
-            c->state = STATE_PLAYING;
-        break;
     }
 
     // Render for the current state.
@@ -316,8 +290,6 @@ static void frame_step(void* arg) {
         const char* opt_labels[OPT_ITEMS];
         int opt_count = build_options(c->rules, opt_labels);
         render_menu("OPTIONS", opt_labels, opt_count, c->selected, OPT_BACK);
-    } else if (c->state == STATE_NOTICE) {
-        render_notice(c->game, "OUT OF CHIPS");
     } else {
         render_frame(c->game);
     }

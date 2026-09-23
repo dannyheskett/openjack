@@ -9,7 +9,6 @@
 typedef enum {
     SFX_DEAL = 0,    // a card lands
     SFX_FLIP,        // the dealer's hole card turns
-    SFX_CHIP,        // the bet changes, or chips go down
     SFX_WIN,
     SFX_LOSE,
     SFX_PUSH,

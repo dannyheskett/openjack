@@ -17,9 +17,7 @@ typedef struct {
     bool any_pressed;         // any of the above this frame (dismisses a notice)
 
     // Table keys (keyboard only; touch uses the on-screen buttons)
-    bool key_hit, key_stand, key_double, key_split, key_surrender;  // H S D P R
-    bool key_insure, key_decline;   // I or Y / N
-    bool bet_up, bet_down;          // Right Up + / Left Down -
+    bool key_hit, key_stand, key_split;  // H S P
 
     // Touch: a completed one-finger tap. tap_x/tap_y are valid only when
     // touch_tap is set. Presses a button, or picks a menu item.
