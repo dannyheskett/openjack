@@ -31,31 +31,28 @@ openjack
 ## Short description (≤80 chars)
 
 ```
-Blackjack against the dealer, with play chips. Free, no ads, no tracking.
+Blackjack against the dealer, no betting. Free, no ads, no tracking.
 ```
 
 ## Full description (≤4000 chars)
 
 ```
-Blackjack (21) against the dealer. Place a bet, take cards, and try to finish closer to 21 than the dealer without going over. The chips are play chips: there is no real money, nothing to buy, and nothing to win.
+Blackjack (21) against the dealer. Take cards and try to finish closer to 21 than the dealer without going over. There is no betting: the game keeps count of the hands you win and lose.
 
 No ads. No tracking. No accounts. No in-app purchases. openjack requests zero permissions and never touches the network. It's just the game.
 
 THE RULES
-• Hit, stand, or double down on any two cards
+• Hit or stand on any hand
 • Split pairs, up to four hands; split aces take one card each
-• Insurance, or even money on a blackjack, when the dealer shows an ace
-• Blackjack pays 3:2, insurance 2:1, and a tie is a push
 • The dealer checks for blackjack under an ace or a ten
+• Each hand wins, loses, or ties the dealer. The game counts your wins and losses
 
 HOUSE RULES IN OPTIONS
 • A single deck or a six-deck shoe
 • Dealer stands on soft 17, or hits it
-• Late surrender on or off
 
 ON ANY SCREEN
 • The table fits your screen, upright or sideways, on a phone or a tablet
-• Run out of chips and you get a fresh stake
 • Fully offline, a small download, and easy on your battery
 
 FREE AND OPEN SOURCE
@@ -66,15 +63,15 @@ openjack is open source. Read the code, report a bug, or build it yourself: http
 
 - **App or game:** Game
 - **Category:** Card
-- **Tags:** card, casino, blackjack, offline
+- **Tags:** card, blackjack, offline
 - **Email:** dan@danheskett.com
 - **Website:** https://danheskett.com
 - **Content rating:** answer the IARC questionnaire truthfully. It asks about
-  simulated gambling: answer **yes, simulated gambling, no real money and no
-  purchases**. The rating comes from the questionnaire and will not be the
-  "Everyone" the other games in this family get.
-- **Target audience:** 18 and over. A simulated-gambling game is not listed for
-  children, so the Families policy does not apply.
+  simulated gambling: answer **no**. There is no betting, wagering, or currency
+  of any kind, only a count of hands won and lost.
+- **Target audience:** set to match the other games in this family. An earlier
+  build had play-chip betting and was set to 18 and over. Update the Play
+  Console content rating and target audience when this build ships.
 
 ## Data safety (Policy → App content)
 

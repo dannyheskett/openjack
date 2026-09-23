@@ -32,19 +32,10 @@ static void poll_keyboard(Input* in) {
     in->select_pressed = (IsKeyPressed(KEY_ENTER) && !in->fullscreen_toggle)
                        || IsKeyPressed(KEY_SPACE);
 
-    // Table keys. Enter / Space (select_pressed) deals and moves to the next
-    // hand; the arrows and + / - change the bet.
-    in->key_hit       = IsKeyPressed(KEY_H);
-    in->key_stand     = IsKeyPressed(KEY_S);
-    in->key_double    = IsKeyPressed(KEY_D);
-    in->key_split     = IsKeyPressed(KEY_P);
-    in->key_surrender = IsKeyPressed(KEY_R);
-    in->key_insure    = IsKeyPressed(KEY_I) || IsKeyPressed(KEY_Y);
-    in->key_decline   = IsKeyPressed(KEY_N);
-    in->bet_up   = IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_UP)
-                || IsKeyPressed(KEY_EQUAL) || IsKeyPressed(KEY_KP_ADD);
-    in->bet_down = IsKeyPressed(KEY_LEFT)  || IsKeyPressed(KEY_DOWN)
-                || IsKeyPressed(KEY_MINUS) || IsKeyPressed(KEY_KP_SUBTRACT);
+    // Table keys. Enter / Space (select_pressed) deals the next hand.
+    in->key_hit   = IsKeyPressed(KEY_H);
+    in->key_stand = IsKeyPressed(KEY_S);
+    in->key_split = IsKeyPressed(KEY_P);
 
     in->any_pressed = in->left_pressed || in->escape_pressed || in->menu_up
                    || in->menu_down || in->select_pressed;

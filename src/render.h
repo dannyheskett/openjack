@@ -15,8 +15,6 @@ void render_cleanup(void);
 // Scenes -------------------------------------------------------------------
 // The table.
 void render_frame(const Game* g);
-// The table with a notice panel over it (the bankroll ran out).
-void render_notice(const Game* g, const char* title);
 // The family menu (menu.c) on the felt. gap_before, if >= 0, inserts a blank
 // line before that item index. Hit-test its rows with menu_hit_test().
 void render_menu(const char* title, const char* const* labels, int count,

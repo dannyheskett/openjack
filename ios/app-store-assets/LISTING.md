@@ -29,7 +29,7 @@ cannot.
 ## Subtitle (<=30 chars)
 
 ```
-Blackjack with play chips
+Beat the dealer to 21
 ```
 
 ## Promotional text (<=170 chars)
@@ -38,7 +38,7 @@ Editable anytime without submitting a new build — use it for release notes or
 seasonal copy.
 
 ```
-No ads, no tracking, no purchases, no real money. Blackjack against the dealer, free and open source.
+No ads, no tracking, no purchases, no betting. Blackjack against the dealer, free and open source.
 ```
 
 ## Keywords (<=100 chars, comma-separated, no spaces after commas)
@@ -46,31 +46,28 @@ No ads, no tracking, no purchases, no real money. Blackjack against the dealer, 
 Do not repeat the app name — it is already indexed.
 
 ```
-blackjack,21,cards,card game,dealer,split,double down,offline,classic,table
+blackjack,21,twenty one,cards,card game,dealer,split,offline,classic,table
 ```
 
 ## Description (<=4000 chars)
 
 ```
-Blackjack (21) against the dealer. Place a bet, take cards, and try to finish closer to 21 than the dealer without going over. The chips are play chips: there is no real money, nothing to buy, and nothing to win.
+Blackjack (21) against the dealer. Take cards and try to finish closer to 21 than the dealer without going over. There is no betting: the game keeps count of the hands you win and lose.
 
 No ads. No tracking. No accounts. No in-app purchases. openjack never touches the network. It's just the game. You can even play it in airplane mode.
 
 THE RULES
-• Hit, stand, or double down on any two cards
+• Hit or stand on any hand
 • Split pairs, up to four hands; split aces take one card each
-• Insurance, or even money on a blackjack, when the dealer shows an ace
-• Blackjack pays 3:2, insurance 2:1, and a tie is a push
 • The dealer checks for blackjack under an ace or a ten
+• Each hand wins, loses, or ties the dealer. The game counts your wins and losses
 
 HOUSE RULES IN OPTIONS
 • A single deck or a six-deck shoe
 • Dealer stands on soft 17, or hits it
-• Late surrender on or off
 
 ON ANY SCREEN
 • The table fits your screen, upright or sideways, on iPhone or iPad
-• Run out of chips and you get a fresh stake
 
 FREE AND OPEN SOURCE
 openjack is open source. Read the code, report a bug, or build it yourself: https://github.com/dannyheskett/openjack
@@ -82,18 +79,19 @@ Sent to Apple's reviewer with every submission that has none yet
 (`scripts/asc_release.py` sets them, with the team's review contact).
 
 ```
-Thank you very much for reviewing my game. openjack is blackjack against the dealer, played with play chips only: there is no real-money wagering, no purchase of any kind, no prizes, and chips cannot be bought or exchanged. It needs no account, sign-in or network access. It runs on iPhone and iPad in either orientation; tapping the title bar at the top of the screen opens the menu, where Options sets the house rules.
+Thank you very much for reviewing my game. openjack is the card game blackjack (21) played against the dealer, with no betting or wagering of any kind: there is no money, no chips, no credits or any other currency, real or simulated, and no purchases or prizes. Each hand is simply won, lost, or tied, and the game shows a count of wins and losses, the way a solitaire game counts games won. It needs no account, sign-in or network access. It runs on iPhone and iPad in either orientation; tapping the title bar at the top of the screen opens the menu, where Options sets the house rules.
 ```
 
 ## App information
 
 - **Category (primary):** Games -> Card
-- **Category (secondary):** Games -> Casino
 - **Content Rights:** does not contain third-party content
-- **Age Rating:** answer **Simulated Gambling: Frequent/Intense** (the whole game
-  is a gambling simulation) and "None" to everything else. App Store Connect
-  computes the rating from the answers; it will not be the 4+ the other games
-  in this family get. Answer "No" to "Gambling" (real money): there is none.
+- **Age Rating:** answer "None" to everything, **Simulated Gambling** included,
+  and "No" to "Gambling". There is no betting or wagering, which is what Apple's
+  definition of simulated gambling requires, so it rates 4+ like the other
+  games in this family. An earlier build had play-chip betting and was rejected
+  because Apple does not accept simulated gambling from an individual
+  developer account.
 - **Copyright:** `2026 Daniel Heskett`
 - **Support URL:** https://danheskett.com
 - **Marketing URL:** https://danheskett.com/projects/openjack/

@@ -1,7 +1,7 @@
 # openjack
 
-Blackjack (21) against the dealer, written in C, played with play chips. It
-runs natively on Windows, macOS, Linux, Android, and iOS, and in the browser via
+Blackjack (21) against the dealer, written in C. There is no betting: the game
+counts the hands you win and lose. It runs natively on Windows, macOS, Linux, Android, and iOS, and in the browser via
 WebAssembly.
 
 Rendering, input, and audio go through raylib 6.0 on every platform except iOS,
@@ -30,19 +30,17 @@ view, so nothing jumps when a hand is split.
 
 - Finish closer to 21 than the dealer without going over. Aces count 1 or 11,
   picture cards 10.
-- **Hit**, **stand**, or **double down** on any two cards (one more card on a
-  doubled bet). A hand that reaches 21 stands by itself.
+- **Hit** or **stand**. A hand that reaches 21 stands by itself.
 - **Split** two cards of the same value, up to four hands. Split aces take one
-  card each, and 21 after a split is not a blackjack. Doubling after a split is
-  allowed.
-- When the dealer shows an ace, **insurance** is offered for half the bet and
-  pays 2:1. Holding a blackjack, the offer is **even money** instead: 1:1 at
-  once, whatever the dealer has.
+  card each, and 21 after a split is not a blackjack.
 - The dealer checks for blackjack under an ace or a ten before anyone plays,
   then draws to 17.
-- **Blackjack pays 3:2.** A tie is a push (the bet comes back).
-- Bets run from 50 in steps of 50, so every payout is a whole number of chips.
-  The bankroll starts at 1000; run out and you get a fresh 1000.
+- Each hand wins, loses, or ties the dealer (a push). The status line counts
+  wins and losses; a split hand counts on its own, and a push counts as
+  neither.
+- There is no betting, and no chips or other currency. An earlier version had
+  play-chip betting, which the App Store does not accept from an individual
+  developer account.
 - Nothing is saved between sessions.
 
 ### House rules (Options)
@@ -51,7 +49,6 @@ view, so nothing jumps when a hand is split.
 |--------|--------|---------|
 | Decks | 1, or a 6-deck shoe | 6 |
 | Soft 17 | dealer stands, or hits | stands |
-| Surrender | late surrender off or on (first two cards, not after a split; half the bet back) | off |
 
 A change applies from the next hand, never to one already dealt. The shoe is
 reshuffled between hands once three quarters of it has been dealt. If a round
@@ -65,10 +62,7 @@ table, so no card can appear twice in a round.
 | Input | Action |
 |-------|--------|
 | Click a button | Do it |
-| H / S / D | Hit / Stand / Double |
-| P / R | Split / Surrender |
-| I or Y / N | Take insurance (or even money) / decline |
-| Left, Down, - / Right, Up, + | Lower / raise the bet |
+| H / S / P | Hit / Stand / Split |
 | Enter / Space | Deal, or the next hand |
 | Escape | Back to the menu, game stays resumable |
 | Alt+Enter | Toggle fullscreen |
@@ -173,10 +167,10 @@ Unit tests with no raylib or window required:
 make test
 ```
 
-- `test_game` — hand totals, 3:2 at every bet, the dealer's peek, insurance and
-  even money, standing and busting, soft 17 both ways, doubling, splitting
-  (pairs, ten-values, aces, the four-hand limit), surrender, bet limits, the
-  refill, actions out of phase, the hidden hole card, the deal queue's order and
+- `test_game` — hand totals, naturals and the dealer's peek, standing and
+  busting, soft 17 both ways, splitting (pairs, ten-values, aces, the four-hand
+  limit), the win and loss count across rounds and split hands, actions out of
+  phase, the hidden hole card, the deal queue's order and
   timing, the shoe (contents, the reshuffle point, and no card twice in a round
   even when the shoe runs dry), and the fixed 60 Hz clock.
 - `test_layout` — readable cards on real device shapes in both orientations;

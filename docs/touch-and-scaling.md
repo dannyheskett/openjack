@@ -71,5 +71,5 @@ separately: each dealt card and the hole-card flip go into a queue in
 `src/game.c`, and `game_update()` plays it out on the fixed 60 Hz clock, a card
 every quarter second. A card slides in from off the top-right corner, where a
 shoe would sit; the hole card turns over a fifth of a second, squeezed through
-the middle of the turn. Sounds and the bankroll follow the queue too, so the
-result is heard and paid when the last card lands, not before.
+the middle of the turn. Sounds and the win and loss count follow the queue too,
+so the result is heard and counted when the last card lands, not before.

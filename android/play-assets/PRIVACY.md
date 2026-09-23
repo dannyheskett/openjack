@@ -2,7 +2,7 @@
 
 _Last updated: September 22, 2026_
 
-openjack ("the app") is a blackjack game played with play chips. This policy
+openjack ("the app") is a blackjack game against the dealer. This policy
 explains, plainly, what the app does with your information: **nothing.**
 
 ## Data we collect
@@ -14,15 +14,15 @@ information or usage data. Specifically:
   it cannot send anything off your device.
 - There are **no accounts, logins, or sign-ins.**
 - There is **no analytics, telemetry, advertising, or third-party SDKs.**
-- Nothing is saved: a game in progress, the bankroll, and your menu choices live
+- Nothing is saved: a game in progress, the win and loss count, and your menu choices live
   only in memory while the app runs.
 
 Because the app cannot access the network, no data ever leaves your device.
 
 ## Money
 
-openjack uses play chips only. There is no real-money wagering, no purchases,
-and no prizes. Chips cannot be bought, sold, or exchanged for anything.
+openjack has no betting or wagering, no chips or other currency, no purchases,
+and no prizes. It counts the hands you win and lose, and nothing else.
 
 ## Children
 

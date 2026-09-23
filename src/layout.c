@@ -30,7 +30,7 @@ static int top_bar_of(int ref) {
 
 #define MIN_CARD_W 16
 
-// A button fits "Surrender" or "Even Money" at the button font.
+// A button fits "Next Hand" at the button font.
 static int button_w_of(int fs) { return fs * 6; }
 
 // Fit the table below the chrome with the buttons in a bottom band or a right
@@ -50,15 +50,12 @@ static Layout arrange(const Layout* base, bool side, int hand_rows) {
         l.btn_x = right - l.btn_w;
         l.btn_y = top;
         l.btn_area_h = bottom - top;
-        l.btn_rows = 0;
         l.table_x = left;
         l.table_w = l.btn_x - l.margin - left;
     } else {
         l.table_x = left;
         l.table_w = right - left;
-        int one_row = MAX_BUTTONS * button_w_of(l.btn_fs) + (MAX_BUTTONS - 1) * l.gap;
-        l.btn_rows = (one_row <= l.table_w) ? 1 : 2;
-        l.btn_area_h = l.btn_rows * l.btn_h + (l.btn_rows - 1) * l.gap;
+        l.btn_area_h = l.btn_h;
         l.btn_x = left;
         l.btn_w = l.table_w;
         l.btn_y = bottom - l.btn_area_h;
@@ -185,31 +182,18 @@ static int phase_buttons(const Game* g, Btn* b) {
     int n = 0;
     if (!g || game_busy(g)) return 0;
     switch (g->phase) {
-    case PHASE_BET:
-        b[n++] = (Btn){ .id = BTN_BET_DOWN, .on = g->bet > MIN_BET };
-        b[n++] = (Btn){ .id = BTN_DEAL,     .on = true };
-        b[n++] = (Btn){ .id = BTN_BET_UP,   .on = g->bet + BET_STEP <= g->bankroll };
-        break;
-    case PHASE_INSURANCE:
-        b[n++] = (Btn){ .id = BTN_INSURE,  .on = game_can_insure(g) };
-        b[n++] = (Btn){ .id = BTN_DECLINE, .on = true };
+    case PHASE_READY:
+    case PHASE_RESULT:
+        b[n++] = (Btn){ .id = BTN_DEAL, .on = true };
         break;
     case PHASE_PLAYER:
-        b[n++] = (Btn){ .id = BTN_HIT,    .on = true };
-        b[n++] = (Btn){ .id = BTN_STAND,  .on = true };
-        b[n++] = (Btn){ .id = BTN_DOUBLE, .on = game_can_double(g) };
-        b[n++] = (Btn){ .id = BTN_SPLIT,  .on = game_can_split(g) };
-        if (g->rules.surrender)
-            b[n++] = (Btn){ .id = BTN_SURRENDER, .on = game_can_surrender(g) };
-        break;
-    case PHASE_RESULT:
-        b[n++] = (Btn){ .id = BTN_NEXT, .on = true };
+        b[n++] = (Btn){ .id = BTN_HIT,   .on = true };
+        b[n++] = (Btn){ .id = BTN_STAND, .on = true };
+        b[n++] = (Btn){ .id = BTN_SPLIT, .on = game_can_split(g) };
         break;
     }
     return n;
 }
-
-static bool is_small(Button id) { return id == BTN_BET_DOWN || id == BTN_BET_UP; }
 
 int layout_buttons(const Layout* l, const Game* g, Btn* out) {
     int n = phase_buttons(g, out);
@@ -217,47 +201,26 @@ int layout_buttons(const Layout* l, const Game* g, Btn* out) {
     int h = l->btn_h, gap = l->gap;
 
     if (l->side_buttons) {
-        // One button per row, except that - and + share the row under Deal.
-        bool bet = (out[0].id == BTN_BET_DOWN);
-        int rows = bet ? 2 : n;
-        int total = rows * h + (rows - 1) * gap;
+        // One button per row, centred down the column.
+        int total = n * h + (n - 1) * gap;
         int y = l->btn_y + (l->btn_area_h - total) / 2;
-        if (bet) {
-            int half = (l->btn_w - gap) / 2;
-            out[1].x = l->btn_x;              out[1].y = y;           out[1].w = l->btn_w; out[1].h = h;
-            out[0].x = l->btn_x;              out[0].y = y + h + gap; out[0].w = half;     out[0].h = h;
-            out[2].x = l->btn_x + half + gap; out[2].y = y + h + gap; out[2].w = half;     out[2].h = h;
-        } else {
-            for (int i = 0; i < n; i++) {
-                out[i].x = l->btn_x;
-                out[i].y = y + i * (h + gap);
-                out[i].w = l->btn_w;
-                out[i].h = h;
-            }
+        for (int i = 0; i < n; i++) {
+            out[i].x = l->btn_x;
+            out[i].y = y + i * (h + gap);
+            out[i].w = l->btn_w;
+            out[i].h = h;
         }
         return n;
     }
 
-    // Bottom band. Three buttons or fewer always make one row, on the bottom
-    // line of the band; more split into two rows when the band has two.
-    int rows  = (l->btn_rows == 2 && n > 3) ? 2 : 1;
-    int first = (rows == 2) ? (n + 1) / 2 : n;
-    int std_w = imin(button_w_of(l->btn_fs), (l->btn_w - (first - 1) * gap) / first);
-    int small_w = imin(h * 3 / 2, std_w);
-    for (int r = 0; r < rows; r++) {
-        int a = (r == 0) ? 0 : first;
-        int z = (r == 0) ? first : n;
-        int row_w = 0;
-        for (int i = a; i < z; i++) row_w += (is_small(out[i].id) ? small_w : std_w) + (i > a ? gap : 0);
-        int x = l->btn_x + (l->btn_w - row_w) / 2;
-        int y = (rows == 2) ? l->btn_y + r * (h + gap) : l->btn_y + l->btn_area_h - h;
-        for (int i = a; i < z; i++) {
-            out[i].w = is_small(out[i].id) ? small_w : std_w;
-            out[i].h = h;
-            out[i].x = x;
-            out[i].y = y;
-            x += out[i].w + gap;
-        }
+    // Bottom band: one row, centred.
+    int w = imin(button_w_of(l->btn_fs), (l->btn_w - (n - 1) * gap) / n);
+    int x = l->btn_x + (l->btn_w - (n * w + (n - 1) * gap)) / 2;
+    for (int i = 0; i < n; i++) {
+        out[i].w = w;
+        out[i].h = h;
+        out[i].x = x + i * (w + gap);
+        out[i].y = l->btn_y;
     }
     return n;
 }

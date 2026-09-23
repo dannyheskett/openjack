@@ -271,20 +271,19 @@ async function capture(target, url, chrome) {
   await shot('01-menu');
 
   await tap(w / 2, await selectedMenuRowY(), 'New Game');
-  // The bet screen: - Deal +, with Deal the widest.
-  let b = await waitButtons(3, 'on the bet screen');
-  const deal = b.reduce((a, c) => (c.w > a.w ? c : a));
-  await tap(deal.cx, deal.cy, 'Deal');
+  // Before the first hand: Deal alone.
+  let b = await waitButtons(1, 'before the first hand');
+  await tap(b[0].cx, b[0].cy, 'Deal');
 
-  // 2. A pair of eights: Hit, Stand, Double and Split all enabled.
-  b = await waitButtons(4, 'after the deal (the pinned clock no longer deals a pair?)');
+  // 2. A pair of eights: Hit, Stand and Split all enabled.
+  b = await waitButtons(3, 'after the deal (the pinned clock no longer deals a pair?)');
   await shot('02-deal');
 
   // Split, then stand on the first hand; the second is dealt its card.
-  await tap(b[3].cx, b[3].cy, 'Split');
-  b = await waitButtons(3, 'on the first split hand (Hit, Stand, Double)');
+  await tap(b[2].cx, b[2].cy, 'Split');
+  b = await waitButtons(2, 'on the first split hand (Hit, Stand)');
   await tap(b[1].cx, b[1].cy, 'Stand');
-  b = await waitButtons(3, 'on the second split hand');
+  b = await waitButtons(2, 'on the second split hand');
   // 3. Two hands, the second one in play.
   await shot('03-split');
 
