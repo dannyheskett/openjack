@@ -184,13 +184,19 @@ make test
 
 ## Continuous integration and releases
 
-Every pull request to `main` builds all platforms via GitHub Actions
-([`ci.yml`](.github/workflows/ci.yml)) and runs `make test`. Pushing to `main`
-cuts the next `release-N` via [`release.yml`](.github/workflows/release.yml),
-which attaches per-platform archives, the Android APK, the iOS `.ipa` and the
-WASM bundle to the GitHub Release; when the store secrets are set it also
-uploads the AAB to the Play internal track, uploads the `.ipa` to TestFlight and
-submits it to App Review. Setup:
+Work branches merge into `staging` (squash) and `main` takes merges from
+`staging` only; every pull request builds all platforms via GitHub Actions
+([`ci.yml`](.github/workflows/ci.yml)) and runs `make test`, and every job must
+pass. Merging `staging` into `main` runs [`build.yml`](.github/workflows/build.yml),
+which builds every platform, tags the next `release-N` and attaches the
+per-platform archives, the Android APK and AAB, the signed iOS `.ipa` and the
+WASM bundle to the GitHub Release. It never ships to a store.
+
+Shipping is the separate, manual [`release.yml`](.github/workflows/release.yml):
+it takes a `release-N` and ships it to Google Play (the track you pick), then
+the App Store (TestFlight for internal testers, then App Review -- withdrawing
+any earlier version still pending review), stops at the first failure, and
+reads each store back at the end. Setup:
 [`android/play-assets/KEYSTORE.md`](android/play-assets/KEYSTORE.md) and
 [`ios/app-store-assets/TESTFLIGHT.md`](ios/app-store-assets/TESTFLIGHT.md).
 
