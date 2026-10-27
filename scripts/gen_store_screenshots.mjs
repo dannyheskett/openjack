@@ -21,8 +21,8 @@
 //   --chrome <path>  Chromium binary  [default: $CHROME, else the Playwright cache]
 //   --only <name>    capture a single target (see TARGETS below)
 //
-// Why a browser and not the real app: the maintainer has no Android device and no
-// Mac, and Device Farm returns video, not clean full-resolution stills.
+// Why a browser and not the real app: the maintainer has no Android device
+// and no Mac.
 //
 // The deal is made repeatable by pinning the page clock. The game seeds its shoe
 // from time() and rand() (src/main.c), and time() in the WebAssembly build is
